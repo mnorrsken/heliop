@@ -1,0 +1,5 @@
+## Append samples of your project ##
+resources:
+- authelia_v1alpha1_authelia.yaml
+- authelia_v1alpha1_autheliaoauthclient.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples

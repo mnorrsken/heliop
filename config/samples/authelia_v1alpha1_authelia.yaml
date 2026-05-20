@@ -1,0 +1,64 @@
+apiVersion: authelia.snosr.se/v1alpha1
+kind: Authelia
+metadata:
+  labels:
+    app.kubernetes.io/name: heliop
+    app.kubernetes.io/managed-by: kustomize
+  name: authelia
+  namespace: authelia
+spec:
+  deployment:
+    replicas: 2
+    image: ghcr.io/authelia/authelia:4
+    secretName: authelia
+    postgresSecretName: authelia-db-app
+    redisSecretName: redis-ha
+  # OIDC clients are injected under identity_providers.oidc.clients from
+  # AutheliaOAuthClient resources targeting this Authelia.
+  config: |
+    default_2fa_method: 'totp'
+    log:
+      level: debug
+    server:
+      address: 'tcp://0.0.0.0:9091/'
+    totp:
+      issuer: 'example.com'
+    authentication_backend:
+      ldap:
+        implementation: 'lldap'
+        address: 'ldap://lldap:3890'
+        base_dn: 'DC=example,DC=com'
+        user: 'UID=read,OU=people,DC=example,DC=com'
+    session:
+      name: 'authelia_session'
+      cookies:
+        - domain: 'example.com'
+          authelia_url: 'https://sso.example.com'
+          default_redirection_url: 'https://www.example.com'
+      redis:
+        host: redis
+        port: 6379
+    storage:
+      postgres:
+        address: 'tcp://authelia-db-rw:5432'
+        database: 'app'
+        username: 'app'
+    notifier:
+      smtp:
+        address: 'smtp.example.com:587'
+        username: 'admin@example.com'
+        sender: 'admin@example.com'
+    access_control:
+      default_policy: deny
+      rules:
+        - domain: 'sso.example.com'
+          policy: bypass
+        - domain: '*.example.com'
+          policy: two_factor
+    identity_providers:
+      oidc:
+        claims_policies:
+          default:
+            id_token: ['groups', 'email', 'preferred_username', 'name']
+        cors:
+          allowed_origins_from_client_redirect_uris: true

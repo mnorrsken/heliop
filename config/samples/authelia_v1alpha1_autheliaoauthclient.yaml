@@ -1,0 +1,47 @@
+apiVersion: authelia.snosr.se/v1alpha1
+kind: AutheliaOAuthClient
+metadata:
+  labels:
+    app.kubernetes.io/name: heliop
+    app.kubernetes.io/managed-by: kustomize
+  name: argocd
+  namespace: authelia
+spec:
+  autheliaRef:
+    name: authelia
+  clientID: argocd
+  clientName: Argo CD
+  authorizationPolicy: one_factor
+  consentMode: implicit
+  claimsPolicy: default
+  redirectURIs:
+    - https://argocd.example.com/auth/callback
+  userinfoSignedResponseAlg: none
+---
+apiVersion: authelia.snosr.se/v1alpha1
+kind: AutheliaOAuthClient
+metadata:
+  labels:
+    app.kubernetes.io/name: heliop
+    app.kubernetes.io/managed-by: kustomize
+  name: argocd-cli
+  namespace: authelia
+spec:
+  autheliaRef:
+    name: authelia
+  clientID: argocd-cli
+  clientName: Argo CD (CLI)
+  public: true
+  authorizationPolicy: one_factor
+  claimsPolicy: default
+  redirectURIs:
+    - http://localhost:8085/auth/callback
+  scopes:
+    - openid
+    - groups
+    - email
+    - profile
+    - offline_access
+  responseTypes:
+    - code
+  userinfoSignedResponseAlg: none

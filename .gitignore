@@ -1,0 +1,20 @@
+plan.txt
+template
+
+# Binaries and build output
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+cover.*
+
+# Go workspace / editor
+go.work
+go.work.sum
+.idea/
+*.swp

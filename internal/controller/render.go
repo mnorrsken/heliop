@@ -53,8 +53,8 @@ func envVarName(clientID string) string {
 // identity_providers.oidc.clients in the Authelia configuration. Secret clients
 // reference their plaintext secret through the envhash shell function rendered
 // by the Deployment's init container.
-func clientToMap(c oidcClient) map[string]interface{} {
-	m := map[string]interface{}{
+func clientToMap(c oidcClient) map[string]any {
+	m := map[string]any{
 		"client_id": c.spec.ClientID,
 	}
 	if c.spec.ClientName != "" {
@@ -98,8 +98,8 @@ func clientToMap(c oidcClient) map[string]interface{} {
 	return m
 }
 
-func toIfaceSlice(in []string) []interface{} {
-	out := make([]interface{}, len(in))
+func toIfaceSlice(in []string) []any {
+	out := make([]any, len(in))
 	for i, v := range in {
 		out[i] = v
 	}
@@ -109,7 +109,7 @@ func toIfaceSlice(in []string) []interface{} {
 // renderConfig parses the user-supplied configuration, injects the OIDC clients
 // under identity_providers.oidc.clients, and returns the resulting YAML.
 func renderConfig(base string, clients []oidcClient) (string, error) {
-	root := map[string]interface{}{}
+	root := map[string]any{}
 	if strings.TrimSpace(base) != "" {
 		if err := yaml.Unmarshal([]byte(base), &root); err != nil {
 			return "", fmt.Errorf("parsing config: %w", err)
@@ -124,7 +124,7 @@ func renderConfig(base string, clients []oidcClient) (string, error) {
 			return sorted[i].spec.ClientID < sorted[j].spec.ClientID
 		})
 
-		clientMaps := make([]interface{}, 0, len(sorted))
+		clientMaps := make([]any, 0, len(sorted))
 		for _, c := range sorted {
 			clientMaps = append(clientMaps, clientToMap(c))
 		}
@@ -143,11 +143,11 @@ func renderConfig(base string, clients []oidcClient) (string, error) {
 
 // childMap returns the nested map at key, creating it if absent or if the
 // existing value is not a map.
-func childMap(parent map[string]interface{}, key string) map[string]interface{} {
-	if existing, ok := parent[key].(map[string]interface{}); ok {
+func childMap(parent map[string]any, key string) map[string]any {
+	if existing, ok := parent[key].(map[string]any); ok {
 		return existing
 	}
-	child := map[string]interface{}{}
+	child := map[string]any{}
 	parent[key] = child
 	return child
 }

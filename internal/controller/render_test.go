@@ -71,23 +71,23 @@ identity_providers:
 		t.Fatalf("renderConfig: %v", err)
 	}
 
-	var root map[string]interface{}
+	var root map[string]any
 	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
 		t.Fatalf("output is not valid yaml: %v", err)
 	}
 
-	idp := root["identity_providers"].(map[string]interface{})
-	oidc := idp["oidc"].(map[string]interface{})
+	idp := root["identity_providers"].(map[string]any)
+	oidc := idp["oidc"].(map[string]any)
 	if oidc["cors"] == nil {
 		t.Error("existing oidc.cors config was dropped")
 	}
-	list, ok := oidc["clients"].([]interface{})
+	list, ok := oidc["clients"].([]any)
 	if !ok || len(list) != 2 {
 		t.Fatalf("expected 2 clients, got %#v", oidc["clients"])
 	}
 
 	// Sorted by client ID: argocd first.
-	first := list[0].(map[string]interface{})
+	first := list[0].(map[string]any)
 	if first["client_id"] != "argocd" {
 		t.Errorf("expected argocd first, got %v", first["client_id"])
 	}
@@ -95,7 +95,7 @@ identity_providers:
 		t.Errorf("unexpected client_secret: %v", first["client_secret"])
 	}
 
-	second := list[1].(map[string]interface{})
+	second := list[1].(map[string]any)
 	if second["public"] != true {
 		t.Errorf("expected public client, got %#v", second)
 	}

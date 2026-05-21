@@ -71,6 +71,9 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
+	if err := r.reconcileCoreSecret(ctx, &authelia); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.reconcileOIDCSecret(ctx, &authelia, oidcData); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -80,7 +83,7 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := r.reconcileService(ctx, &authelia); err != nil {
 		return ctrl.Result{}, err
 	}
-	readyReplicas, err := r.reconcileDeployment(ctx, &authelia)
+	readyReplicas, err := r.reconcileDeployment(ctx, &authelia, len(clients) > 0)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -174,6 +177,31 @@ func clientTargets(c *autheliav1alpha1.AutheliaOAuthClient, a *autheliav1alpha1.
 	return ns == a.Namespace
 }
 
+// reconcileCoreSecret generates the operator-managed core secret holding the
+// session, storage encryption and OIDC secrets. It is a no-op when the user
+// supplies an existing Secret. Values are generated once and preserved across
+// reconciles so they are never rotated.
+func (r *AutheliaReconciler) reconcileCoreSecret(ctx context.Context, a *autheliav1alpha1.Authelia) error {
+	if a.Spec.Deployment.ExistingSecret != "" {
+		return nil
+	}
+
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: coreSecretName(a), Namespace: a.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if secret.Labels == nil {
+			secret.Labels = labelsFor(a)
+		}
+		secret.Type = corev1.SecretTypeOpaque
+		data, genErr := generatedCoreSecretData(secret.Data)
+		if genErr != nil {
+			return genErr
+		}
+		secret.Data = data
+		return controllerutil.SetControllerReference(a, secret, r.Scheme)
+	})
+	return err
+}
+
 func (r *AutheliaReconciler) reconcileOIDCSecret(ctx context.Context, a *autheliav1alpha1.Authelia, data map[string][]byte) error {
 	desired := buildOIDCSecret(a, data)
 	if err := controllerutil.SetControllerReference(a, desired, r.Scheme); err != nil {
@@ -213,8 +241,8 @@ func (r *AutheliaReconciler) reconcileService(ctx context.Context, a *autheliav1
 	return err
 }
 
-func (r *AutheliaReconciler) reconcileDeployment(ctx context.Context, a *autheliav1alpha1.Authelia) (int32, error) {
-	desired := buildDeployment(a)
+func (r *AutheliaReconciler) reconcileDeployment(ctx context.Context, a *autheliav1alpha1.Authelia, oidcEnabled bool) (int32, error) {
+	desired := buildDeployment(a, oidcEnabled)
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		dep.Labels = desired.Labels

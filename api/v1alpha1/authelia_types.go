@@ -190,23 +190,32 @@ type AutheliaDeploymentSpec struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
-	// secretName is the Secret providing Authelia's core secrets. It is exposed
-	// to the container via envFrom and mounted at /secrets.
+	// existingSecret references an existing Secret providing Authelia's core
+	// secrets (keys SESSION_ENCRYPTION_KEY, STORAGE_ENCRYPTION_KEY,
+	// OIDC_HMAC_SECRET, OIDC_PRIVATE_KEY). It is exposed to the container via
+	// envFrom and mounted at /secrets. When unset, the operator generates these
+	// secrets into a managed Secret named "<name>-secrets" (generated once and
+	// preserved across reconciles).
 	// +optional
-	// +kubebuilder:default="authelia"
-	SecretName string `json:"secretName,omitempty"`
+	ExistingSecret string `json:"existingSecret,omitempty"`
 
 	// postgresSecretName is the Secret mounted at /pg-secret providing the
-	// PostgreSQL password (key: password).
+	// PostgreSQL password (key: password). When set, the operator mounts it and
+	// sets AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE. Unset by default.
 	// +optional
-	// +kubebuilder:default="authelia-db-app"
 	PostgresSecretName string `json:"postgresSecretName,omitempty"`
 
 	// redisSecretName is the Secret mounted at /redis-secret providing the
-	// Redis password (key: redis-password).
+	// Redis password (key: redis-password). When set, the operator mounts it and
+	// sets AUTHELIA_SESSION_REDIS_PASSWORD_FILE. Unset by default.
 	// +optional
-	// +kubebuilder:default="redis-ha"
 	RedisSecretName string `json:"redisSecretName,omitempty"`
+
+	// smtpPassword, when true, exposes the SMTP password from the core secret
+	// (key SMTP_PASSWORD) to Authelia via AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE.
+	// Disabled by default.
+	// +optional
+	SMTPPassword *bool `json:"smtpPassword,omitempty"`
 }
 
 // AutheliaStatus defines the observed state of Authelia.

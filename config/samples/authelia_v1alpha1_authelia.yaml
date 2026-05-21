@@ -10,9 +10,15 @@ spec:
   deployment:
     replicas: 2
     image: ghcr.io/authelia/authelia:4
-    secretName: authelia
+    # Core secrets (session, storage encryption, OIDC HMAC + issuer key) are
+    # generated into "<name>-secrets" when existingSecret is omitted. Set it to
+    # bring your own Secret containing those keys instead:
+    # existingSecret: authelia
+    # Postgres, Redis and SMTP password mapping are opt-in. Omit these to run
+    # with e.g. sqlite storage, no Redis session store, and no SMTP password.
     postgresSecretName: authelia-db-app
     redisSecretName: redis-ha
+    smtpPassword: true
   # First factor backend. The operator renders this into authentication_backend
   # and mounts the referenced Secret(s). The LDAP bind password is mounted as a
   # file and exposed via AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE.

@@ -137,7 +137,7 @@ func buildService(a *autheliav1alpha1.Authelia) *corev1.Service {
 	}
 }
 
-func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
+func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool) *appsv1.Deployment {
 	d := a.Spec.Deployment
 	replicas := int32(2)
 	if d.Replicas != nil {
@@ -155,22 +155,13 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 	if resources.Requests == nil && resources.Limits == nil {
 		resources = defaultResources()
 	}
-	secretName := d.SecretName
-	if secretName == "" {
-		secretName = "authelia"
-	}
-	pgSecret := d.PostgresSecretName
-	if pgSecret == "" {
-		pgSecret = "authelia-db-app"
-	}
-	redisSecret := d.RedisSecretName
-	if redisSecret == "" {
-		redisSecret = "redis-ha"
-	}
+	secretName := coreSecretName(a)
 	backend := a.Spec.AuthenticationBackend
 
 	podLabels := selectorFor(a)
-	podLabels["redis-ha-client"] = "true"
+	if d.RedisSecretName != "" {
+		podLabels["redis-ha-client"] = "true"
+	}
 
 	probe := func(initialDelay, period int32) *corev1.Probe {
 		return &corev1.Probe{
@@ -194,15 +185,21 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 	mainMounts := []corev1.VolumeMount{
 		{Name: "config", MountPath: "/configuration.yaml", SubPath: "configuration.yaml", ReadOnly: true},
 		{Name: "authelia-secret", MountPath: "/secrets", ReadOnly: true},
-		{Name: "redis-secret", MountPath: "/redis-secret", ReadOnly: true},
-		{Name: "pg-secret", MountPath: "/pg-secret", ReadOnly: true},
 	}
 	volumes := []corev1.Volume{
 		{Name: "authelia-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}},
 		{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "config-template", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(a)}}}},
-		{Name: "pg-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: pgSecret}}},
-		{Name: "redis-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: redisSecret}}},
+	}
+
+	// Mount the PostgreSQL and Redis password Secrets only when configured.
+	if d.PostgresSecretName != "" {
+		volumes = append(volumes, corev1.Volume{Name: "pg-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: d.PostgresSecretName}}})
+		mainMounts = append(mainMounts, corev1.VolumeMount{Name: "pg-secret", MountPath: "/pg-secret", ReadOnly: true})
+	}
+	if d.RedisSecretName != "" {
+		volumes = append(volumes, corev1.Volume{Name: "redis-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: d.RedisSecretName}}})
+		mainMounts = append(mainMounts, corev1.VolumeMount{Name: "redis-secret", MountPath: "/redis-secret", ReadOnly: true})
 	}
 
 	// Mount the first factor backend Secret(s) so the users file / LDAP bind
@@ -252,7 +249,7 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 						ImagePullPolicy: pullPolicy,
 						Command:         []string{"authelia"},
 						Args:            []string{"--config=/configuration.yaml"},
-						Env:             autheliaFileEnv(backend),
+						Env:             autheliaFileEnv(d, backend, oidcEnabled),
 						Resources:       resources,
 						Ports: []corev1.ContainerPort{{
 							Name:          "http",
@@ -272,20 +269,35 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 }
 
 // autheliaFileEnv lists the secret-file env references used by Authelia, mirroring
-// the upstream deployment template. The LDAP password reference depends on the
-// configured authentication backend: it points at the mounted backend Secret
-// when LDAP is configured first-class, is omitted entirely for the file backend,
-// and falls back to the legacy /secrets/LDAP_PASSWORD path otherwise.
-func autheliaFileEnv(backend *autheliav1alpha1.AuthenticationBackendSpec) []corev1.EnvVar {
+// the upstream deployment template. The core secrets (session, storage encryption
+// key, OIDC) are always referenced. The PostgreSQL, Redis and SMTP password
+// references are opt-in: they are only set when the corresponding Secret name /
+// flag is configured, so they are not mapped by default. The LDAP password
+// reference depends on the configured authentication backend.
+func autheliaFileEnv(d autheliav1alpha1.AutheliaDeploymentSpec, backend *autheliav1alpha1.AuthenticationBackendSpec, oidcEnabled bool) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "AUTHELIA_SERVER_DISABLE_HEALTHCHECK", Value: "true"},
 		{Name: "AUTHELIA_SESSION_SECRET_FILE", Value: "/secrets/SESSION_ENCRYPTION_KEY"},
-		{Name: "AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE", Value: "/secrets/SMTP_PASSWORD"},
 		{Name: "AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE", Value: "/secrets/STORAGE_ENCRYPTION_KEY"},
-		{Name: "AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE", Value: "/secrets/OIDC_HMAC_SECRET"},
-		{Name: "AUTHELIA_IDENTITY_PROVIDERS_OIDC_ISSUER_PRIVATE_KEY_FILE", Value: "/secrets/OIDC_PRIVATE_KEY"},
-		{Name: "AUTHELIA_SESSION_REDIS_PASSWORD_FILE", Value: "/redis-secret/redis-password"},
-		{Name: "AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE", Value: "/pg-secret/password"},
+	}
+
+	// The OIDC secrets implicitly enable the identity provider, which then
+	// requires at least one client. Only map them when clients are configured.
+	if oidcEnabled {
+		env = append(env,
+			corev1.EnvVar{Name: "AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE", Value: "/secrets/OIDC_HMAC_SECRET"},
+			corev1.EnvVar{Name: "AUTHELIA_IDENTITY_PROVIDERS_OIDC_ISSUER_PRIVATE_KEY_FILE", Value: "/secrets/OIDC_PRIVATE_KEY"},
+		)
+	}
+
+	if d.PostgresSecretName != "" {
+		env = append(env, corev1.EnvVar{Name: "AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE", Value: "/pg-secret/password"})
+	}
+	if d.RedisSecretName != "" {
+		env = append(env, corev1.EnvVar{Name: "AUTHELIA_SESSION_REDIS_PASSWORD_FILE", Value: "/redis-secret/redis-password"})
+	}
+	if d.SMTPPassword != nil && *d.SMTPPassword {
+		env = append(env, corev1.EnvVar{Name: "AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE", Value: "/secrets/SMTP_PASSWORD"})
 	}
 
 	switch {

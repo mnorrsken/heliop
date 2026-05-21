@@ -197,6 +197,15 @@ spec:
                 description: deployment configures the Authelia Deployment generated
                   by the operator.
                 properties:
+                  existingSecret:
+                    description: |-
+                      existingSecret references an existing Secret providing Authelia's core
+                      secrets (keys SESSION_ENCRYPTION_KEY, STORAGE_ENCRYPTION_KEY,
+                      OIDC_HMAC_SECRET, OIDC_PRIVATE_KEY). It is exposed to the container via
+                      envFrom and mounted at /secrets. When unset, the operator generates these
+                      secrets into a managed Secret named "<name>-secrets" (generated once and
+                      preserved across reconciles).
+                    type: string
                   image:
                     default: ghcr.io/authelia/authelia:4
                     description: image is the Authelia container image.
@@ -207,16 +216,16 @@ spec:
                       Authelia container.
                     type: string
                   postgresSecretName:
-                    default: authelia-db-app
                     description: |-
                       postgresSecretName is the Secret mounted at /pg-secret providing the
-                      PostgreSQL password (key: password).
+                      PostgreSQL password (key: password). When set, the operator mounts it and
+                      sets AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE. Unset by default.
                     type: string
                   redisSecretName:
-                    default: redis-ha
                     description: |-
                       redisSecretName is the Secret mounted at /redis-secret providing the
-                      Redis password (key: redis-password).
+                      Redis password (key: redis-password). When set, the operator mounts it and
+                      sets AUTHELIA_SESSION_REDIS_PASSWORD_FILE. Unset by default.
                     type: string
                   replicas:
                     default: 2
@@ -284,12 +293,12 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
-                  secretName:
-                    default: authelia
+                  smtpPassword:
                     description: |-
-                      secretName is the Secret providing Authelia's core secrets. It is exposed
-                      to the container via envFrom and mounted at /secrets.
-                    type: string
+                      smtpPassword, when true, exposes the SMTP password from the core secret
+                      (key SMTP_PASSWORD) to Authelia via AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE.
+                      Disabled by default.
+                    type: boolean
                 type: object
             required:
             - config

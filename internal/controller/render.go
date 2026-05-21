@@ -17,10 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
@@ -106,13 +108,20 @@ func toIfaceSlice(in []string) []any {
 	return out
 }
 
-// renderConfig parses the user-supplied configuration, injects the OIDC clients
-// under identity_providers.oidc.clients, and returns the resulting YAML.
-func renderConfig(base string, clients []oidcClient) (string, error) {
+// renderConfig parses the user-supplied configuration, merges the first factor
+// authentication backend (when set), injects the OIDC clients under
+// identity_providers.oidc.clients, and returns the resulting YAML.
+func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(base) != "" {
 		if err := yaml.Unmarshal([]byte(base), &root); err != nil {
 			return "", fmt.Errorf("parsing config: %w", err)
+		}
+	}
+
+	if backend != nil {
+		if err := applyAuthenticationBackend(root, backend); err != nil {
+			return "", err
 		}
 	}
 
@@ -150,4 +159,99 @@ func childMap(parent map[string]any, key string) map[string]any {
 	child := map[string]any{}
 	parent[key] = child
 	return child
+}
+
+// applyAuthenticationBackend merges the configured file or ldap backend into
+// authentication_backend, preserving sibling keys (e.g. password_reset) already
+// present in the user config. The LDAP bind password is intentionally omitted;
+// it is supplied at runtime through the *_PASSWORD_FILE environment variable.
+func applyAuthenticationBackend(root map[string]any, backend *autheliav1alpha1.AuthenticationBackendSpec) error {
+	ab := childMap(root, "authentication_backend")
+
+	switch {
+	case backend.File != nil:
+		delete(ab, "ldap")
+		file, err := fileBackendMap(backend.File)
+		if err != nil {
+			return err
+		}
+		ab["file"] = file
+	case backend.LDAP != nil:
+		delete(ab, "file")
+		ldap, err := ldapBackendMap(backend.LDAP)
+		if err != nil {
+			return err
+		}
+		ab["ldap"] = ldap
+	}
+	return nil
+}
+
+func fileBackendMap(f *autheliav1alpha1.FileAuthenticationBackend) (map[string]any, error) {
+	m := map[string]any{
+		"path": fileUsersPath(f.UsersSecret),
+	}
+	if f.Watch != nil {
+		m["watch"] = *f.Watch
+	}
+	if f.Search != nil {
+		search := map[string]any{}
+		if f.Search.Email != nil {
+			search["email"] = *f.Search.Email
+		}
+		if f.Search.CaseInsensitive != nil {
+			search["case_insensitive"] = *f.Search.CaseInsensitive
+		}
+		if len(search) > 0 {
+			m["search"] = search
+		}
+	}
+	if err := setRaw(m, "password", f.Password); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func ldapBackendMap(l *autheliav1alpha1.LDAPAuthenticationBackend) (map[string]any, error) {
+	m := map[string]any{
+		"address": l.Address,
+		"base_dn": l.BaseDN,
+		"user":    l.User,
+	}
+	setIf(m, "implementation", l.Implementation)
+	setIf(m, "additional_users_dn", l.AdditionalUsersDN)
+	setIf(m, "users_filter", l.UsersFilter)
+	setIf(m, "additional_groups_dn", l.AdditionalGroupsDN)
+	setIf(m, "groups_filter", l.GroupsFilter)
+	setIf(m, "group_search_mode", l.GroupSearchMode)
+	setIf(m, "timeout", l.Timeout)
+	if l.StartTLS != nil {
+		m["start_tls"] = *l.StartTLS
+	}
+	if err := setRaw(m, "attributes", l.Attributes); err != nil {
+		return nil, err
+	}
+	if err := setRaw(m, "tls", l.TLS); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func setIf(m map[string]any, key, value string) {
+	if value != "" {
+		m[key] = value
+	}
+}
+
+// setRaw decodes a RawExtension passthrough field into the target map under key.
+func setRaw(m map[string]any, key string, raw *runtime.RawExtension) error {
+	if raw == nil || len(raw.Raw) == 0 {
+		return nil
+	}
+	var v any
+	if err := json.Unmarshal(raw.Raw, &v); err != nil {
+		return fmt.Errorf("decoding %s: %w", key, err)
+	}
+	m[key] = v
+	return nil
 }

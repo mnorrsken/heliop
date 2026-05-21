@@ -49,11 +49,149 @@ spec:
           spec:
             description: spec defines the desired state of Authelia
             properties:
+              authenticationBackend:
+                description: |-
+                  authenticationBackend configures the first factor authentication backend.
+                  When set, the operator renders it into authentication_backend and mounts
+                  the referenced Secrets into the Authelia container. If unset, the backend
+                  is taken from config verbatim.
+                properties:
+                  file:
+                    description: |-
+                      file configures the file-based backend. The users database is sourced from
+                      a Secret and mounted into the Authelia container.
+                    properties:
+                      password:
+                        description: |-
+                          password configures password hashing options, passed through verbatim to
+                          authentication_backend.file.password.
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      search:
+                        description: search configures user search behaviour.
+                        properties:
+                          caseInsensitive:
+                            description: caseInsensitive enables case-insensitive
+                              username matching.
+                            type: boolean
+                          email:
+                            description: email allows users to authenticate using
+                              their email address.
+                            type: boolean
+                        type: object
+                      usersSecret:
+                        description: |-
+                          usersSecret references the Secret key holding the users database YAML. It
+                          is mounted into the container and referenced as
+                          authentication_backend.file.path.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      watch:
+                        description: watch enables watching the users file for changes.
+                        type: boolean
+                    required:
+                    - usersSecret
+                    type: object
+                  ldap:
+                    description: |-
+                      ldap configures the LDAP backend. The bind password is sourced from a
+                      Secret, mounted as a file, and referenced via the
+                      AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable.
+                    properties:
+                      additionalGroupsDN:
+                        description: additionalGroupsDN is the OU path appended to
+                          baseDN for group searches.
+                        type: string
+                      additionalUsersDN:
+                        description: additionalUsersDN is the OU path appended to
+                          baseDN for user searches.
+                        type: string
+                      address:
+                        description: address is the LDAP server URL, e.g. "ldap://lldap:3890".
+                        type: string
+                      attributes:
+                        description: |-
+                          attributes maps directory attributes, passed through verbatim to
+                          authentication_backend.ldap.attributes.
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      baseDN:
+                        description: baseDN is the base distinguished name container
+                          for queries.
+                        type: string
+                      groupSearchMode:
+                        description: groupSearchMode selects the group discovery method
+                          (default "filter").
+                        type: string
+                      groupsFilter:
+                        description: groupsFilter is the LDAP filter selecting groups.
+                        type: string
+                      implementation:
+                        description: |-
+                          implementation selects the LDAP implementation, e.g. "lldap", "custom" or
+                          "activedirectory".
+                        type: string
+                      passwordSecret:
+                        description: passwordSecret references the Secret key holding
+                          the bind password.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      startTLS:
+                        description: startTLS enables the StartTLS process on the
+                          connection.
+                        type: boolean
+                      timeout:
+                        description: timeout is the connection dial timeout, e.g.
+                          "5s".
+                        type: string
+                      tls:
+                        description: |-
+                          tls configures TLS verification, passed through verbatim to
+                          authentication_backend.ldap.tls.
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      user:
+                        description: user is the distinguished name used to bind to
+                          the directory.
+                        type: string
+                      usersFilter:
+                        description: usersFilter is the LDAP filter selecting valid
+                          users.
+                        type: string
+                    required:
+                    - address
+                    - baseDN
+                    - passwordSecret
+                    - user
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of file or ldap must be set
+                  rule: has(self.file) != has(self.ldap)
               config:
                 description: |-
                   config is the Authelia configuration.yaml content. The operator injects
                   OIDC clients defined via AutheliaOAuthClient resources into
-                  identity_providers.oidc.clients before rendering it into a ConfigMap.
+                  identity_providers.oidc.clients, and merges authenticationBackend (when
+                  set) into authentication_backend, before rendering it into a ConfigMap.
                 type: string
               deployment:
                 description: deployment configures the Authelia Deployment generated

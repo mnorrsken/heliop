@@ -45,6 +45,22 @@ func configMapName(a *autheliav1alpha1.Authelia) string { return a.Name + "-conf
 
 func oidcSecretName(a *autheliav1alpha1.Authelia) string { return a.Name + "-oidc-clients" }
 
+// Mount points for first factor backend secrets. Each Secret is mounted as a
+// directory so its keys appear as files; the configured key names the file.
+const (
+	fileBackendMountPath  = "/authelia/file-backend"
+	ldapPasswordMountPath = "/authelia/ldap"
+	ldapPasswordEnvVar    = "AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE"
+)
+
+func fileUsersPath(ref autheliav1alpha1.SecretKeyRef) string {
+	return fileBackendMountPath + "/" + ref.Key
+}
+
+func ldapPasswordPath(ref autheliav1alpha1.SecretKeyRef) string {
+	return ldapPasswordMountPath + "/" + ref.Key
+}
+
 func labelsFor(a *autheliav1alpha1.Authelia) map[string]string {
 	return map[string]string{
 		"app.kubernetes.io/name":       "authelia",
@@ -151,6 +167,7 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 	if redisSecret == "" {
 		redisSecret = "redis-ha"
 	}
+	backend := a.Spec.AuthenticationBackend
 
 	podLabels := selectorFor(a)
 	podLabels["redis-ha-client"] = "true"
@@ -173,6 +190,33 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 	}
 	startup := probe(10, 5)
 	startup.FailureThreshold = 6
+
+	mainMounts := []corev1.VolumeMount{
+		{Name: "config", MountPath: "/configuration.yaml", SubPath: "configuration.yaml", ReadOnly: true},
+		{Name: "authelia-secret", MountPath: "/secrets", ReadOnly: true},
+		{Name: "redis-secret", MountPath: "/redis-secret", ReadOnly: true},
+		{Name: "pg-secret", MountPath: "/pg-secret", ReadOnly: true},
+	}
+	volumes := []corev1.Volume{
+		{Name: "authelia-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}},
+		{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "config-template", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(a)}}}},
+		{Name: "pg-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: pgSecret}}},
+		{Name: "redis-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: redisSecret}}},
+	}
+
+	// Mount the first factor backend Secret(s) so the users file / LDAP bind
+	// password are available to the Authelia container.
+	if backend != nil {
+		switch {
+		case backend.File != nil:
+			volumes = append(volumes, corev1.Volume{Name: "file-backend", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: backend.File.UsersSecret.Name}}})
+			mainMounts = append(mainMounts, corev1.VolumeMount{Name: "file-backend", MountPath: fileBackendMountPath, ReadOnly: true})
+		case backend.LDAP != nil:
+			volumes = append(volumes, corev1.Volume{Name: "ldap-password", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: backend.LDAP.PasswordSecret.Name}}})
+			mainMounts = append(mainMounts, corev1.VolumeMount{Name: "ldap-password", MountPath: ldapPasswordMountPath, ReadOnly: true})
+		}
+	}
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -208,7 +252,7 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 						ImagePullPolicy: pullPolicy,
 						Command:         []string{"authelia"},
 						Args:            []string{"--config=/configuration.yaml"},
-						Env:             autheliaFileEnv(),
+						Env:             autheliaFileEnv(backend),
 						Resources:       resources,
 						Ports: []corev1.ContainerPort{{
 							Name:          "http",
@@ -218,20 +262,9 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 						StartupProbe:   startup,
 						LivenessProbe:  probe(0, 30),
 						ReadinessProbe: probe(0, 5),
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "config", MountPath: "/configuration.yaml", SubPath: "configuration.yaml", ReadOnly: true},
-							{Name: "authelia-secret", MountPath: "/secrets", ReadOnly: true},
-							{Name: "redis-secret", MountPath: "/redis-secret", ReadOnly: true},
-							{Name: "pg-secret", MountPath: "/pg-secret", ReadOnly: true},
-						},
+						VolumeMounts:   mainMounts,
 					}},
-					Volumes: []corev1.Volume{
-						{Name: "authelia-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}},
-						{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-						{Name: "config-template", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(a)}}}},
-						{Name: "pg-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: pgSecret}}},
-						{Name: "redis-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: redisSecret}}},
-					},
+					Volumes: volumes,
 				},
 			},
 		},
@@ -239,12 +272,14 @@ func buildDeployment(a *autheliav1alpha1.Authelia) *appsv1.Deployment {
 }
 
 // autheliaFileEnv lists the secret-file env references used by Authelia, mirroring
-// the upstream deployment template.
-func autheliaFileEnv() []corev1.EnvVar {
-	return []corev1.EnvVar{
+// the upstream deployment template. The LDAP password reference depends on the
+// configured authentication backend: it points at the mounted backend Secret
+// when LDAP is configured first-class, is omitted entirely for the file backend,
+// and falls back to the legacy /secrets/LDAP_PASSWORD path otherwise.
+func autheliaFileEnv(backend *autheliav1alpha1.AuthenticationBackendSpec) []corev1.EnvVar {
+	env := []corev1.EnvVar{
 		{Name: "AUTHELIA_SERVER_DISABLE_HEALTHCHECK", Value: "true"},
 		{Name: "AUTHELIA_SESSION_SECRET_FILE", Value: "/secrets/SESSION_ENCRYPTION_KEY"},
-		{Name: "AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE", Value: "/secrets/LDAP_PASSWORD"},
 		{Name: "AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE", Value: "/secrets/SMTP_PASSWORD"},
 		{Name: "AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE", Value: "/secrets/STORAGE_ENCRYPTION_KEY"},
 		{Name: "AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE", Value: "/secrets/OIDC_HMAC_SECRET"},
@@ -252,6 +287,14 @@ func autheliaFileEnv() []corev1.EnvVar {
 		{Name: "AUTHELIA_SESSION_REDIS_PASSWORD_FILE", Value: "/redis-secret/redis-password"},
 		{Name: "AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE", Value: "/pg-secret/password"},
 	}
+
+	switch {
+	case backend == nil:
+		env = append(env, corev1.EnvVar{Name: ldapPasswordEnvVar, Value: "/secrets/LDAP_PASSWORD"})
+	case backend.LDAP != nil:
+		env = append(env, corev1.EnvVar{Name: ldapPasswordEnvVar, Value: ldapPasswordPath(backend.LDAP.PasswordSecret)})
+	}
+	return env
 }
 
 func ptr[T any](v T) *T { return &v }

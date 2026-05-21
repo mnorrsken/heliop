@@ -13,6 +13,27 @@ spec:
     secretName: authelia
     postgresSecretName: authelia-db-app
     redisSecretName: redis-ha
+  # First factor backend. The operator renders this into authentication_backend
+  # and mounts the referenced Secret(s). The LDAP bind password is mounted as a
+  # file and exposed via AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE.
+  authenticationBackend:
+    ldap:
+      implementation: lldap
+      address: ldap://lldap:3890
+      baseDN: DC=example,DC=com
+      user: UID=read,OU=people,DC=example,DC=com
+      passwordSecret:
+        name: authelia-ldap
+        key: password
+    # Alternatively, a file backend sourced from a Secret (mutually exclusive
+    # with ldap). The key is mounted as a file and used as file.path:
+    # file:
+    #   usersSecret:
+    #     name: authelia-users
+    #     key: users_database.yml
+    #   search:
+    #     email: true
+    #     caseInsensitive: true
   # OIDC clients are injected under identity_providers.oidc.clients from
   # AutheliaOAuthClient resources targeting this Authelia.
   config: |
@@ -23,12 +44,6 @@ spec:
       address: 'tcp://0.0.0.0:9091/'
     totp:
       issuer: 'example.com'
-    authentication_backend:
-      ldap:
-        implementation: 'lldap'
-        address: 'ldap://lldap:3890'
-        base_dn: 'DC=example,DC=com'
-        user: 'UID=read,OU=people,DC=example,DC=com'
     session:
       name: 'authelia_session'
       cookies:

@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // AutheliaSpec defines the desired state of Authelia
@@ -27,11 +28,144 @@ type AutheliaSpec struct {
 	// +optional
 	Deployment AutheliaDeploymentSpec `json:"deployment,omitempty"`
 
+	// authenticationBackend configures the first factor authentication backend.
+	// When set, the operator renders it into authentication_backend and mounts
+	// the referenced Secrets into the Authelia container. If unset, the backend
+	// is taken from config verbatim.
+	// +optional
+	AuthenticationBackend *AuthenticationBackendSpec `json:"authenticationBackend,omitempty"`
+
 	// config is the Authelia configuration.yaml content. The operator injects
 	// OIDC clients defined via AutheliaOAuthClient resources into
-	// identity_providers.oidc.clients before rendering it into a ConfigMap.
+	// identity_providers.oidc.clients, and merges authenticationBackend (when
+	// set) into authentication_backend, before rendering it into a ConfigMap.
 	// +required
 	Config string `json:"config"`
+}
+
+// SecretKeyRef references a single key within a Secret in the Authelia's
+// namespace.
+type SecretKeyRef struct {
+	// name is the name of the Secret.
+	// +required
+	Name string `json:"name"`
+
+	// key is the key within the Secret.
+	// +required
+	Key string `json:"key"`
+}
+
+// AuthenticationBackendSpec configures Authelia's first factor backend. Exactly
+// one of file or ldap must be set.
+// +kubebuilder:validation:XValidation:rule="has(self.file) != has(self.ldap)",message="exactly one of file or ldap must be set"
+type AuthenticationBackendSpec struct {
+	// file configures the file-based backend. The users database is sourced from
+	// a Secret and mounted into the Authelia container.
+	// +optional
+	File *FileAuthenticationBackend `json:"file,omitempty"`
+
+	// ldap configures the LDAP backend. The bind password is sourced from a
+	// Secret, mounted as a file, and referenced via the
+	// AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable.
+	// +optional
+	LDAP *LDAPAuthenticationBackend `json:"ldap,omitempty"`
+}
+
+// FileAuthenticationBackend configures the file-based first factor backend.
+// https://www.authelia.com/configuration/first-factor/file/
+type FileAuthenticationBackend struct {
+	// usersSecret references the Secret key holding the users database YAML. It
+	// is mounted into the container and referenced as
+	// authentication_backend.file.path.
+	// +required
+	UsersSecret SecretKeyRef `json:"usersSecret"`
+
+	// watch enables watching the users file for changes.
+	// +optional
+	Watch *bool `json:"watch,omitempty"`
+
+	// search configures user search behaviour.
+	// +optional
+	Search *FileSearch `json:"search,omitempty"`
+
+	// password configures password hashing options, passed through verbatim to
+	// authentication_backend.file.password.
+	// +optional
+	Password *runtime.RawExtension `json:"password,omitempty"`
+}
+
+// FileSearch configures user search behaviour for the file backend.
+type FileSearch struct {
+	// email allows users to authenticate using their email address.
+	// +optional
+	Email *bool `json:"email,omitempty"`
+
+	// caseInsensitive enables case-insensitive username matching.
+	// +optional
+	CaseInsensitive *bool `json:"caseInsensitive,omitempty"`
+}
+
+// LDAPAuthenticationBackend configures the LDAP first factor backend.
+// https://www.authelia.com/configuration/first-factor/ldap/
+type LDAPAuthenticationBackend struct {
+	// address is the LDAP server URL, e.g. "ldap://lldap:3890".
+	// +required
+	Address string `json:"address"`
+
+	// baseDN is the base distinguished name container for queries.
+	// +required
+	BaseDN string `json:"baseDN"`
+
+	// user is the distinguished name used to bind to the directory.
+	// +required
+	User string `json:"user"`
+
+	// passwordSecret references the Secret key holding the bind password.
+	// +required
+	PasswordSecret SecretKeyRef `json:"passwordSecret"`
+
+	// implementation selects the LDAP implementation, e.g. "lldap", "custom" or
+	// "activedirectory".
+	// +optional
+	Implementation string `json:"implementation,omitempty"`
+
+	// additionalUsersDN is the OU path appended to baseDN for user searches.
+	// +optional
+	AdditionalUsersDN string `json:"additionalUsersDN,omitempty"`
+
+	// usersFilter is the LDAP filter selecting valid users.
+	// +optional
+	UsersFilter string `json:"usersFilter,omitempty"`
+
+	// additionalGroupsDN is the OU path appended to baseDN for group searches.
+	// +optional
+	AdditionalGroupsDN string `json:"additionalGroupsDN,omitempty"`
+
+	// groupsFilter is the LDAP filter selecting groups.
+	// +optional
+	GroupsFilter string `json:"groupsFilter,omitempty"`
+
+	// groupSearchMode selects the group discovery method (default "filter").
+	// +optional
+	GroupSearchMode string `json:"groupSearchMode,omitempty"`
+
+	// startTLS enables the StartTLS process on the connection.
+	// +optional
+	StartTLS *bool `json:"startTLS,omitempty"`
+
+	// timeout is the connection dial timeout, e.g. "5s".
+	// +optional
+	Timeout string `json:"timeout,omitempty"`
+
+	// attributes maps directory attributes, passed through verbatim to
+	// authentication_backend.ldap.attributes.
+	// +optional
+	Attributes *runtime.RawExtension `json:"attributes,omitempty"`
+
+	// tls configures TLS verification, passed through verbatim to
+	// authentication_backend.ldap.tls.
+	// +optional
+	TLS *runtime.RawExtension `json:"tls,omitempty"`
 }
 
 // AutheliaDeploymentSpec configures the generated Authelia Deployment.

@@ -66,7 +66,7 @@ identity_providers:
 		},
 	}
 
-	out, err := renderConfig(base, clients)
+	out, err := renderConfig(base, clients, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -104,8 +104,73 @@ identity_providers:
 	}
 }
 
+func TestRenderConfigLDAPBackend(t *testing.T) {
+	base := "authentication_backend:\n  password_reset:\n    disable: true\n  ldap:\n    address: 'ldap://old'\n"
+	startTLS := true
+	backend := &autheliav1alpha1.AuthenticationBackendSpec{
+		LDAP: &autheliav1alpha1.LDAPAuthenticationBackend{
+			Address:        "ldap://lldap:3890",
+			BaseDN:         "DC=example,DC=com",
+			User:           "UID=bind,OU=people,DC=example,DC=com",
+			Implementation: "lldap",
+			StartTLS:       &startTLS,
+			PasswordSecret: autheliav1alpha1.SecretKeyRef{Name: "ldap-creds", Key: "password"},
+		},
+	}
+
+	out, err := renderConfig(base, nil, backend)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("invalid yaml: %v", err)
+	}
+	ab := root["authentication_backend"].(map[string]any)
+	if ab["password_reset"] == nil {
+		t.Error("sibling password_reset was dropped")
+	}
+	ldap := ab["ldap"].(map[string]any)
+	if ldap["address"] != "ldap://lldap:3890" {
+		t.Errorf("address not overridden: %v", ldap["address"])
+	}
+	if ldap["base_dn"] != "DC=example,DC=com" {
+		t.Errorf("base_dn = %v", ldap["base_dn"])
+	}
+	if ldap["start_tls"] != true {
+		t.Errorf("start_tls = %v", ldap["start_tls"])
+	}
+	if _, has := ldap["password"]; has {
+		t.Error("ldap password must not be rendered into config (provided via env)")
+	}
+}
+
+func TestRenderConfigFileBackend(t *testing.T) {
+	backend := &autheliav1alpha1.AuthenticationBackendSpec{
+		File: &autheliav1alpha1.FileAuthenticationBackend{
+			UsersSecret: autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"},
+		},
+	}
+
+	out, err := renderConfig("", nil, backend)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("invalid yaml: %v", err)
+	}
+	file := root["authentication_backend"].(map[string]any)["file"].(map[string]any)
+	want := fileBackendMountPath + "/users_database.yml"
+	if file["path"] != want {
+		t.Errorf("file.path = %v, want %v", file["path"], want)
+	}
+}
+
 func TestRenderConfigEmptyBase(t *testing.T) {
-	out, err := renderConfig("", nil)
+	out, err := renderConfig("", nil, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}

@@ -43,9 +43,9 @@ type AutheliaReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=authelia.snosr.se,resources=authelia,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=authelia.snosr.se,resources=authelia/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=authelia.snosr.se,resources=authelia/finalizers,verbs=update
+// +kubebuilder:rbac:groups=authelia.snosr.se,resources=authelias,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=authelia.snosr.se,resources=authelias/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=authelia.snosr.se,resources=authelias/finalizers,verbs=update
 // +kubebuilder:rbac:groups=authelia.snosr.se,resources=autheliaoauthclients,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
@@ -66,7 +66,7 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	renderedConfig, err := renderConfig(authelia.Spec.Config, clients)
+	renderedConfig, err := renderConfig(authelia.Spec.Config, clients, authelia.Spec.AuthenticationBackend)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

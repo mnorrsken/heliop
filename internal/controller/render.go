@@ -111,7 +111,7 @@ func toIfaceSlice(in []string) []any {
 // renderConfig parses the user-supplied configuration, merges the first factor
 // authentication backend (when set), injects the OIDC clients under
 // identity_providers.oidc.clients, and returns the resulting YAML.
-func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec) (string, error) {
+func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec, session *autheliav1alpha1.SessionSpec) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(base) != "" {
 		if err := yaml.Unmarshal([]byte(base), &root); err != nil {
@@ -121,6 +121,12 @@ func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.A
 
 	if backend != nil {
 		if err := applyAuthenticationBackend(root, backend); err != nil {
+			return "", err
+		}
+	}
+
+	if session != nil {
+		if err := applySession(root, session); err != nil {
 			return "", err
 		}
 	}
@@ -183,6 +189,45 @@ func applyAuthenticationBackend(root map[string]any, backend *autheliav1alpha1.A
 			return err
 		}
 		ab["ldap"] = ldap
+	}
+	return nil
+}
+
+// applySession merges the session configuration into the config, preserving
+// sibling keys (e.g. session.redis). When no explicit cookies list is given but
+// a domain is set, a sensible default cookie is generated from domain and
+// hostname (defaulting to auth.<domain>).
+func applySession(root map[string]any, s *autheliav1alpha1.SessionSpec) error {
+	session := childMap(root, "session")
+
+	setIf(session, "name", s.Name)
+	setIf(session, "same_site", s.SameSite)
+	setIf(session, "inactivity", s.Inactivity)
+	setIf(session, "expiration", s.Expiration)
+	setIf(session, "remember_me", s.RememberMe)
+
+	switch {
+	case s.Cookies != nil:
+		var v any
+		if err := json.Unmarshal(s.Cookies.Raw, &v); err != nil {
+			return fmt.Errorf("decoding session.cookies: %w", err)
+		}
+		session["cookies"] = v
+	case s.Domain != "":
+		hostname := s.Hostname
+		if hostname == "" {
+			hostname = "auth." + s.Domain
+		}
+		cookie := map[string]any{
+			"domain":       s.Domain,
+			"authelia_url": "https://" + hostname,
+		}
+		setIf(cookie, "default_redirection_url", s.DefaultRedirectionURL)
+		session["cookies"] = []any{cookie}
+	}
+
+	if err := setRaw(session, "redis", s.Redis); err != nil {
+		return err
 	}
 	return nil
 }

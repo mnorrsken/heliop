@@ -35,6 +35,12 @@ type AutheliaSpec struct {
 	// +optional
 	AuthenticationBackend *AuthenticationBackendSpec `json:"authenticationBackend,omitempty"`
 
+	// session configures the session cookies. When set, the operator merges it
+	// into the session configuration, generating a sensible default cookie from
+	// domain and hostname when an explicit cookies list is not provided.
+	// +optional
+	Session *SessionSpec `json:"session,omitempty"`
+
 	// config is the Authelia configuration.yaml content. The operator injects
 	// OIDC clients defined via AutheliaOAuthClient resources into
 	// identity_providers.oidc.clients, and merges authenticationBackend (when
@@ -166,6 +172,62 @@ type LDAPAuthenticationBackend struct {
 	// authentication_backend.ldap.tls.
 	// +optional
 	TLS *runtime.RawExtension `json:"tls,omitempty"`
+}
+
+// SessionSpec configures Authelia session cookies.
+// https://www.authelia.com/configuration/session/introduction/
+// +kubebuilder:validation:XValidation:rule="!has(self.hostname) || !has(self.domain) || self.hostname == self.domain || self.hostname.endsWith('.' + self.domain)",message="hostname must equal or be a subdomain of domain"
+type SessionSpec struct {
+	// domain is the cookie domain (e.g. example.com). When set and cookies is
+	// not provided, the operator generates a default cookie for this domain.
+	// +optional
+	Domain string `json:"domain,omitempty"`
+
+	// hostname is the fully qualified hostname where the Authelia portal is
+	// served (e.g. auth.example.com); it becomes authelia_url
+	// (https://<hostname>) of the generated cookie. Must equal or be a subdomain
+	// of domain. Defaults to "auth.<domain>" when omitted.
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// defaultRedirectionURL is the URL users are redirected to after
+	// authenticating when no target is supplied. Optional.
+	// +optional
+	DefaultRedirectionURL string `json:"defaultRedirectionURL,omitempty"`
+
+	// name is the session cookie name (Authelia default: authelia_session).
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// sameSite is the cookie SameSite policy: lax, strict or none (default lax).
+	// +optional
+	// +kubebuilder:validation:Enum=lax;strict;none
+	SameSite string `json:"sameSite,omitempty"`
+
+	// inactivity is the inactivity timeout, e.g. "5 minutes" (default 5m).
+	// +optional
+	Inactivity string `json:"inactivity,omitempty"`
+
+	// expiration is the session expiration, e.g. "1 hour" (default 1h).
+	// +optional
+	Expiration string `json:"expiration,omitempty"`
+
+	// rememberMe is the remember-me duration, e.g. "1 month" (default 1mo).
+	// Set to "0" to disable the remember-me feature.
+	// +optional
+	RememberMe string `json:"rememberMe,omitempty"`
+
+	// cookies, when set, replaces the generated cookie list and is passed
+	// through verbatim to session.cookies.
+	// +optional
+	Cookies *runtime.RawExtension `json:"cookies,omitempty"`
+
+	// redis configures the Redis session provider, passed through verbatim to
+	// session.redis. The password should be provided separately via
+	// deployment.redisSecretName.
+	// https://www.authelia.com/configuration/session/redis/
+	// +optional
+	Redis *runtime.RawExtension `json:"redis,omitempty"`
 }
 
 // AutheliaDeploymentSpec configures the generated Authelia Deployment.

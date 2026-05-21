@@ -67,7 +67,7 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	renderedConfig, err := renderConfig(authelia.Spec.Config, clients, authelia.Spec.AuthenticationBackend)
+	renderedConfig, err := renderConfig(authelia.Spec.Config, clients, authelia.Spec.AuthenticationBackend, authelia.Spec.Session)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

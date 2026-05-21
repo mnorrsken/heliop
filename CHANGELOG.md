@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-21
+
+### Added
+- First-class `spec.session`. `domain` and `hostname` generate a sensible
+  default session cookie (`authelia_url: https://<hostname>`, defaulting to
+  `auth.<domain>`) when an explicit cookie list is not supplied. Top-level
+  `name`, `sameSite`, `inactivity`, `expiration`, `rememberMe` and
+  `defaultRedirectionURL` are supported, along with a verbatim `cookies`
+  override. A CEL rule requires `hostname` to equal or be a subdomain of
+  `domain`. The session config is merged, preserving sibling keys.
+- `spec.session.redis` is copied verbatim into `session.redis`, supporting the
+  full Redis session provider configuration. The Redis password is still
+  supplied via `deployment.redisSecretName`.
+
 ## [0.3.0] - 2026-05-21
 
 ### Added
@@ -62,6 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows for linting, testing, building the controller image,
   and releasing multi-arch images to GHCR on `v*` tags.
 
+[0.4.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.2.0
 [0.1.1]: https://github.com/mnorrsken/heliop/releases/tag/v0.1.1

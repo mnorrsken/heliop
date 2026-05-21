@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
@@ -66,7 +67,7 @@ identity_providers:
 		},
 	}
 
-	out, err := renderConfig(base, clients, nil)
+	out, err := renderConfig(base, clients, nil, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -118,7 +119,7 @@ func TestRenderConfigLDAPBackend(t *testing.T) {
 		},
 	}
 
-	out, err := renderConfig(base, nil, backend)
+	out, err := renderConfig(base, nil, backend, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -153,7 +154,7 @@ func TestRenderConfigFileBackend(t *testing.T) {
 		},
 	}
 
-	out, err := renderConfig("", nil, backend)
+	out, err := renderConfig("", nil, backend, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -169,8 +170,82 @@ func TestRenderConfigFileBackend(t *testing.T) {
 	}
 }
 
+func TestRenderConfigSessionGeneratesCookie(t *testing.T) {
+	base := "session:\n  redis:\n    host: redis\n"
+	session := &autheliav1alpha1.SessionSpec{
+		Domain:     "example.com",
+		Expiration: "2 hours",
+	}
+
+	out, err := renderConfig(base, nil, nil, session)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("invalid yaml: %v", err)
+	}
+	s := root["session"].(map[string]any)
+	if s["redis"] == nil {
+		t.Error("sibling session.redis was dropped")
+	}
+	if s["expiration"] != "2 hours" {
+		t.Errorf("expiration = %v", s["expiration"])
+	}
+	cookies := s["cookies"].([]any)
+	if len(cookies) != 1 {
+		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	}
+	cookie := cookies[0].(map[string]any)
+	if cookie["domain"] != "example.com" {
+		t.Errorf("domain = %v", cookie["domain"])
+	}
+	if cookie["authelia_url"] != "https://auth.example.com" {
+		t.Errorf("authelia_url = %v (want default auth.<domain>)", cookie["authelia_url"])
+	}
+}
+
+func TestRenderConfigSessionHostnameOverride(t *testing.T) {
+	session := &autheliav1alpha1.SessionSpec{Domain: "example.com", Hostname: "sso.example.com"}
+	out, err := renderConfig("", nil, nil, session)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("invalid yaml: %v", err)
+	}
+	cookie := root["session"].(map[string]any)["cookies"].([]any)[0].(map[string]any)
+	if cookie["authelia_url"] != "https://sso.example.com" {
+		t.Errorf("authelia_url = %v", cookie["authelia_url"])
+	}
+}
+
+func TestRenderConfigSessionRedisVerbatim(t *testing.T) {
+	session := &autheliav1alpha1.SessionSpec{
+		Domain: "example.com",
+		Redis:  &runtime.RawExtension{Raw: []byte(`{"host":"redis","port":6379,"database_index":2}`)},
+	}
+	out, err := renderConfig("", nil, nil, session)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("invalid yaml: %v", err)
+	}
+	redis := root["session"].(map[string]any)["redis"].(map[string]any)
+	if redis["host"] != "redis" {
+		t.Errorf("host = %v", redis["host"])
+	}
+	if redis["database_index"] != float64(2) {
+		t.Errorf("database_index = %v", redis["database_index"])
+	}
+}
+
 func TestRenderConfigEmptyBase(t *testing.T) {
-	out, err := renderConfig("", nil, nil)
+	out, err := renderConfig("", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}

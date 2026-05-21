@@ -169,6 +169,7 @@ type LDAPAuthenticationBackend struct {
 }
 
 // AutheliaDeploymentSpec configures the generated Authelia Deployment.
+// +kubebuilder:validation:XValidation:rule="!has(self.volumeClaimTemplate) || (has(self.replicas) && self.replicas == 1)",message="volumeClaimTemplate requires replicas to be 1"
 type AutheliaDeploymentSpec struct {
 	// replicas is the number of Authelia pods to run.
 	// +optional
@@ -216,6 +217,14 @@ type AutheliaDeploymentSpec struct {
 	// Disabled by default.
 	// +optional
 	SMTPPassword *bool `json:"smtpPassword,omitempty"`
+
+	// volumeClaimTemplate has the operator create and manage a PersistentVolume
+	// Claim named "<name>-data" mounted at /data, for persistent state such as a
+	// SQLite database. Because the claim is ReadWriteOnce, this is only permitted
+	// when replicas is 1. The PVC is retained if the Authelia resource is
+	// deleted. When unset, /data uses an emptyDir and does not survive restarts.
+	// +optional
+	VolumeClaimTemplate *corev1.PersistentVolumeClaimSpec `json:"volumeClaimTemplate,omitempty"`
 }
 
 // AutheliaStatus defines the observed state of Authelia.

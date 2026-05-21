@@ -45,6 +45,21 @@ func configMapName(a *autheliav1alpha1.Authelia) string { return a.Name + "-conf
 
 func oidcSecretName(a *autheliav1alpha1.Authelia) string { return a.Name + "-oidc-clients" }
 
+func dataPVCName(a *autheliav1alpha1.Authelia) string { return a.Name + "-data" }
+
+// buildDataPVC builds the operator-managed PersistentVolumeClaim mounted at
+// /data from the configured volumeClaimTemplate.
+func buildDataPVC(a *autheliav1alpha1.Authelia) *corev1.PersistentVolumeClaim {
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dataPVCName(a),
+			Namespace: a.Namespace,
+			Labels:    labelsFor(a),
+		},
+		Spec: *a.Spec.Deployment.VolumeClaimTemplate,
+	}
+}
+
 // Mount points for first factor backend secrets. Each Secret is mounted as a
 // directory so its keys appear as files; the configured key names the file.
 const (
@@ -182,14 +197,23 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool) *appsv1.Dep
 	startup := probe(10, 5)
 	startup.FailureThreshold = 6
 
+	// /data holds persistent state (e.g. the SQLite database). Use the
+	// operator-managed PVC when a volumeClaimTemplate is set, else an emptyDir.
+	dataVolume := corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
+	if d.VolumeClaimTemplate != nil {
+		dataVolume = corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: dataPVCName(a)}}
+	}
+
 	mainMounts := []corev1.VolumeMount{
 		{Name: "config", MountPath: "/configuration.yaml", SubPath: "configuration.yaml", ReadOnly: true},
 		{Name: "authelia-secret", MountPath: "/secrets", ReadOnly: true},
+		{Name: "data", MountPath: "/data"},
 	}
 	volumes := []corev1.Volume{
 		{Name: "authelia-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}},
 		{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "config-template", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(a)}}}},
+		{Name: "data", VolumeSource: dataVolume},
 	}
 
 	// Mount the PostgreSQL and Redis password Secrets only when configured.

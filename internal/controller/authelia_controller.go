@@ -49,6 +49,7 @@ type AutheliaReconciler struct {
 // +kubebuilder:rbac:groups=authelia.snosr.se,resources=autheliaoauthclients,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 
 // Reconcile renders the Authelia configuration (including OIDC clients sourced
 // from AutheliaOAuthClient resources) and reconciles the Deployment, Service,
@@ -81,6 +82,9 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileService(ctx, &authelia); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileDataPVC(ctx, &authelia); err != nil {
 		return ctrl.Result{}, err
 	}
 	readyReplicas, err := r.reconcileDeployment(ctx, &authelia, len(clients) > 0)
@@ -215,6 +219,24 @@ func (r *AutheliaReconciler) reconcileOIDCSecret(ctx context.Context, a *autheli
 		return controllerutil.SetControllerReference(a, secret, r.Scheme)
 	})
 	return err
+}
+
+// reconcileDataPVC creates the operator-managed /data PVC when a
+// volumeClaimTemplate is configured. The PVC is created once and never updated
+// (most of its spec is immutable) or deleted (its data is retained).
+func (r *AutheliaReconciler) reconcileDataPVC(ctx context.Context, a *autheliav1alpha1.Authelia) error {
+	if a.Spec.Deployment.VolumeClaimTemplate == nil {
+		return nil
+	}
+	pvc := &corev1.PersistentVolumeClaim{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: a.Namespace, Name: dataPVCName(a)}, pvc)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return err
+	}
+	return r.Create(ctx, buildDataPVC(a))
 }
 
 func (r *AutheliaReconciler) reconcileConfigMap(ctx context.Context, a *autheliav1alpha1.Authelia, rendered string) error {

@@ -33,6 +33,12 @@ custom resources in the `authelia.snosr.se/v1alpha1` API group:
 - **Persistent storage** — `deployment.volumeClaimTemplate` has the operator
   create a retained PVC mounted at `/data` (requires `replicas: 1`); otherwise
   `/data` is an `emptyDir`.
+- **Traefik integration** — `spec.traefik` generates the portal IngressRoute (at
+  `spec.hostname`) and a `<name>-forwardauth` Middleware for protecting other
+  routes.
+- **Self-contained rendering** — the operator renders the final config (hashing
+  OIDC client secrets with PBKDF2 itself) and rolls the Deployment automatically
+  when the config changes; there is no init container.
 
 ## Getting Started
 

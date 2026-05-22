@@ -504,11 +504,18 @@ spec:
                 - message: volumeClaimTemplate requires replicas to be 1
                   rule: '!has(self.volumeClaimTemplate) || (has(self.replicas) &&
                     self.replicas == 1)'
+              hostname:
+                description: |-
+                  hostname is the fully qualified hostname where the Authelia portal is
+                  served (e.g. auth.example.com). It is used as the session cookie
+                  authelia_url and as the Traefik IngressRoute host. Must equal or be a
+                  subdomain of session.domain.
+                type: string
               session:
                 description: |-
                   session configures the session cookies. When set, the operator merges it
                   into the session configuration, generating a sensible default cookie from
-                  domain and hostname when an explicit cookies list is not provided.
+                  hostname and session.domain when an explicit cookies list is not provided.
                 properties:
                   cookies:
                     description: |-
@@ -524,18 +531,12 @@ spec:
                   domain:
                     description: |-
                       domain is the cookie domain (e.g. example.com). When set and cookies is
-                      not provided, the operator generates a default cookie for this domain.
+                      not provided, the operator generates a default cookie for this domain
+                      using the top-level hostname as authelia_url.
                     type: string
                   expiration:
                     description: expiration is the session expiration, e.g. "1 hour"
                       (default 1h).
-                    type: string
-                  hostname:
-                    description: |-
-                      hostname is the fully qualified hostname where the Authelia portal is
-                      served (e.g. auth.example.com); it becomes authelia_url
-                      (https://<hostname>) of the generated cookie. Must equal or be a subdomain
-                      of domain. Defaults to "auth.<domain>" when omitted.
                     type: string
                   inactivity:
                     description: inactivity is the inactivity timeout, e.g. "5 minutes"
@@ -567,13 +568,31 @@ spec:
                     - none
                     type: string
                 type: object
-                x-kubernetes-validations:
-                - message: hostname must equal or be a subdomain of domain
-                  rule: '!has(self.hostname) || !has(self.domain) || self.hostname
-                    == self.domain || self.hostname.endsWith(''.'' + self.domain)'
+              traefik:
+                description: |-
+                  traefik, when set, makes the operator generate a Traefik IngressRoute for
+                  the portal (at hostname) and a forwardAuth Middleware named
+                  "<name>-forwardauth" that other IngressRoutes can reference to require
+                  authentication. Requires the Traefik CRDs and hostname to be set.
+                properties:
+                  entryPoints:
+                    description: |-
+                      entryPoints are the Traefik entry points the portal IngressRoute listens
+                      on. Defaults to ["websecure"].
+                    items:
+                      type: string
+                    type: array
+                type: object
             required:
             - config
             type: object
+            x-kubernetes-validations:
+            - message: hostname is required when traefik is set
+              rule: '!has(self.traefik) || has(self.hostname)'
+            - message: hostname must equal or be a subdomain of session.domain
+              rule: '!has(self.hostname) || !has(self.session) || !has(self.session.domain)
+                || self.hostname == self.session.domain || self.hostname.endsWith(''.''
+                + self.session.domain)'
           status:
             description: status defines the observed state of Authelia
             properties:

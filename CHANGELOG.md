@@ -5,6 +5,28 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-05-22
+
+### Added
+- Top-level `spec.hostname` (moved from `session.hostname`): the portal FQDN used
+  for the session cookie `authelia_url` and the Traefik IngressRoute host.
+- `spec.traefik`: when set, the operator generates a Traefik IngressRoute for the
+  portal (at `hostname`, on the configured `entryPoints`, default `websecure`) and
+  a forwardAuth Middleware named `<name>-forwardauth` that other IngressRoutes can
+  reference to require authentication. Requires the Traefik CRDs.
+- Config changes now roll the Deployment automatically via a
+  `heliop.snosr.se/config-checksum` pod annotation — no manual restart needed.
+
+### Changed
+- **Breaking:** `session.hostname` moved to `spec.hostname`.
+- **Breaking:** the operator now renders the final configuration itself. OIDC
+  client secrets are hashed with PBKDF2-SHA512 by the operator and embedded
+  directly in the config; the digest is stored once in `<name>-oauth-secret`
+  (`client_secret_digest`) and never rotated. The init container, the `envhash`
+  shell rendering, and the aggregated `<name>-oidc-clients` Secret are removed.
+  As a result, shell-style expansions (`$(...)`, `$VAR`) in `spec.config` are no
+  longer evaluated — the config is treated as literal YAML.
+
 ## [0.4.0] - 2026-05-21
 
 ### Added
@@ -76,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows for linting, testing, building the controller image,
   and releasing multi-arch images to GHCR on `v*` tags.
 
+[0.5.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.5.0
 [0.4.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.3.0
 [0.2.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.2.0

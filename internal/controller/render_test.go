@@ -26,19 +26,6 @@ import (
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
 )
 
-func TestEnvVarName(t *testing.T) {
-	cases := map[string]string{
-		"argocd":     "OIDCC_ARGOCD",
-		"argocd-cli": "OIDCC_ARGOCD_CLI",
-		"my.app/1":   "OIDCC_MY_APP_1",
-	}
-	for in, want := range cases {
-		if got := envVarName(in); got != want {
-			t.Errorf("envVarName(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestRenderConfigInjectsClients(t *testing.T) {
 	base := `log:
   level: debug
@@ -55,7 +42,7 @@ identity_providers:
 				AuthorizationPolicy: "one_factor",
 				RedirectURIs:        []string{"https://argocd.snosr.se/auth/callback"},
 			},
-			envName: "OIDCC_ARGOCD",
+			secretDigest: "$pbkdf2-sha512$310000$abc$def",
 		},
 		{
 			spec: autheliav1alpha1.AutheliaOAuthClientSpec{
@@ -63,11 +50,10 @@ identity_providers:
 				Public:       true,
 				RedirectURIs: []string{"http://localhost:8085/auth/callback"},
 			},
-			envName: "OIDCC_CLI",
 		},
 	}
 
-	out, err := renderConfig(base, clients, nil, nil)
+	out, err := renderConfig(base, clients, nil, nil, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -92,7 +78,7 @@ identity_providers:
 	if first["client_id"] != "argocd" {
 		t.Errorf("expected argocd first, got %v", first["client_id"])
 	}
-	if first["client_secret"] != "$(envhash OIDCC_ARGOCD)" {
+	if first["client_secret"] != "$pbkdf2-sha512$310000$abc$def" {
 		t.Errorf("unexpected client_secret: %v", first["client_secret"])
 	}
 
@@ -119,7 +105,7 @@ func TestRenderConfigLDAPBackend(t *testing.T) {
 		},
 	}
 
-	out, err := renderConfig(base, nil, backend, nil)
+	out, err := renderConfig(base, nil, backend, nil, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -154,7 +140,7 @@ func TestRenderConfigFileBackend(t *testing.T) {
 		},
 	}
 
-	out, err := renderConfig("", nil, backend, nil)
+	out, err := renderConfig("", nil, backend, nil, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -177,7 +163,7 @@ func TestRenderConfigSessionGeneratesCookie(t *testing.T) {
 		Expiration: "2 hours",
 	}
 
-	out, err := renderConfig(base, nil, nil, session)
+	out, err := renderConfig(base, nil, nil, session, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -207,8 +193,8 @@ func TestRenderConfigSessionGeneratesCookie(t *testing.T) {
 }
 
 func TestRenderConfigSessionHostnameOverride(t *testing.T) {
-	session := &autheliav1alpha1.SessionSpec{Domain: "example.com", Hostname: "sso.example.com"}
-	out, err := renderConfig("", nil, nil, session)
+	session := &autheliav1alpha1.SessionSpec{Domain: "example.com"}
+	out, err := renderConfig("", nil, nil, session, "sso.example.com")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -227,7 +213,7 @@ func TestRenderConfigSessionRedisVerbatim(t *testing.T) {
 		Domain: "example.com",
 		Redis:  &runtime.RawExtension{Raw: []byte(`{"host":"redis","port":6379,"database_index":2}`)},
 	}
-	out, err := renderConfig("", nil, nil, session)
+	out, err := renderConfig("", nil, nil, session, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -245,7 +231,7 @@ func TestRenderConfigSessionRedisVerbatim(t *testing.T) {
 }
 
 func TestRenderConfigEmptyBase(t *testing.T) {
-	out, err := renderConfig("", nil, nil, nil)
+	out, err := renderConfig("", nil, nil, nil, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}

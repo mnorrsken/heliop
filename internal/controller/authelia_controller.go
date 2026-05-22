@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,6 +51,7 @@ type AutheliaReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=traefik.io,resources=ingressroutes;middlewares,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile renders the Authelia configuration (including OIDC clients sourced
 // from AutheliaOAuthClient resources) and reconciles the Deployment, Service,
@@ -62,20 +64,17 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	clients, oidcData, missing, err := r.collectClients(ctx, &authelia)
+	clients, missing, err := r.collectClients(ctx, &authelia)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	renderedConfig, err := renderConfig(authelia.Spec.Config, clients, authelia.Spec.AuthenticationBackend, authelia.Spec.Session)
+	renderedConfig, err := renderConfig(authelia.Spec.Config, clients, authelia.Spec.AuthenticationBackend, authelia.Spec.Session, authelia.Spec.Hostname)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	if err := r.reconcileCoreSecret(ctx, &authelia); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileOIDCSecret(ctx, &authelia, oidcData); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileConfigMap(ctx, &authelia, renderedConfig); err != nil {
@@ -87,7 +86,10 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if err := r.reconcileDataPVC(ctx, &authelia); err != nil {
 		return ctrl.Result{}, err
 	}
-	readyReplicas, err := r.reconcileDeployment(ctx, &authelia, len(clients) > 0)
+	if err := r.reconcileTraefik(ctx, &authelia); err != nil {
+		return ctrl.Result{}, err
+	}
+	readyReplicas, err := r.reconcileDeployment(ctx, &authelia, len(clients) > 0, configChecksum(renderedConfig))
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -108,17 +110,16 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return ctrl.Result{}, nil
 }
 
-// collectClients lists the OAuth clients targeting this Authelia, reads their
-// generated secrets, and returns the rendered client list, the aggregated env
-// data, and the number of clients still waiting for a secret.
-func (r *AutheliaReconciler) collectClients(ctx context.Context, a *autheliav1alpha1.Authelia) ([]oidcClient, map[string][]byte, int, error) {
+// collectClients lists the OAuth clients targeting this Authelia, reads the
+// PBKDF2 digest of each confidential client's secret, and returns the rendered
+// client list plus the number of clients still waiting for their digest.
+func (r *AutheliaReconciler) collectClients(ctx context.Context, a *autheliav1alpha1.Authelia) ([]oidcClient, int, error) {
 	var list autheliav1alpha1.AutheliaOAuthClientList
 	if err := r.List(ctx, &list); err != nil {
-		return nil, nil, 0, err
+		return nil, 0, err
 	}
 
 	clients := make([]oidcClient, 0)
-	data := map[string][]byte{}
 	missing := 0
 
 	for i := range list.Items {
@@ -132,30 +133,28 @@ func (r *AutheliaReconciler) collectClients(ctx context.Context, a *autheliav1al
 		}
 		spec := c.Spec
 		spec.ClientID = clientID
-		entry := oidcClient{spec: spec, envName: envVarName(clientID)}
 
 		if c.Spec.Public {
-			clients = append(clients, entry)
+			clients = append(clients, oidcClient{spec: spec})
 			continue
 		}
 
-		secret, err := r.clientSecretValue(ctx, c)
+		digest, err := r.clientSecretDigest(ctx, c)
 		if err != nil {
-			return nil, nil, 0, err
+			return nil, 0, err
 		}
-		if secret == "" {
+		if digest == "" {
 			missing++
 			continue
 		}
-		data[entry.envName] = []byte(secret)
-		clients = append(clients, entry)
+		clients = append(clients, oidcClient{spec: spec, secretDigest: digest})
 	}
-	return clients, data, missing, nil
+	return clients, missing, nil
 }
 
-// clientSecretValue returns the plaintext client_secret stored in the client's
-// generated Secret, or "" if it does not exist yet.
-func (r *AutheliaReconciler) clientSecretValue(ctx context.Context, c *autheliav1alpha1.AutheliaOAuthClient) (string, error) {
+// clientSecretDigest returns the PBKDF2 digest stored in the client's generated
+// Secret, or "" if it does not exist yet.
+func (r *AutheliaReconciler) clientSecretDigest(ctx context.Context, c *autheliav1alpha1.AutheliaOAuthClient) (string, error) {
 	name := c.Status.SecretName
 	if name == "" {
 		name = c.Name + "-oauth-secret"
@@ -167,7 +166,7 @@ func (r *AutheliaReconciler) clientSecretValue(ctx context.Context, c *autheliav
 		}
 		return "", err
 	}
-	return string(secret.Data["client_secret"]), nil
+	return string(secret.Data["client_secret_digest"]), nil
 }
 
 func clientTargets(c *autheliav1alpha1.AutheliaOAuthClient, a *autheliav1alpha1.Authelia) bool {
@@ -206,21 +205,6 @@ func (r *AutheliaReconciler) reconcileCoreSecret(ctx context.Context, a *autheli
 	return err
 }
 
-func (r *AutheliaReconciler) reconcileOIDCSecret(ctx context.Context, a *autheliav1alpha1.Authelia, data map[string][]byte) error {
-	desired := buildOIDCSecret(a, data)
-	if err := controllerutil.SetControllerReference(a, desired, r.Scheme); err != nil {
-		return err
-	}
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
-		secret.Labels = desired.Labels
-		secret.Type = desired.Type
-		secret.Data = desired.Data
-		return controllerutil.SetControllerReference(a, secret, r.Scheme)
-	})
-	return err
-}
-
 // reconcileDataPVC creates the operator-managed /data PVC when a
 // volumeClaimTemplate is configured. The PVC is created once and never updated
 // (most of its spec is immutable) or deleted (its data is retained).
@@ -237,6 +221,35 @@ func (r *AutheliaReconciler) reconcileDataPVC(ctx context.Context, a *autheliav1
 		return err
 	}
 	return r.Create(ctx, buildDataPVC(a))
+}
+
+// reconcileTraefik generates the Traefik forwardAuth Middleware and the portal
+// IngressRoute when spec.traefik is set. It is a no-op otherwise.
+func (r *AutheliaReconciler) reconcileTraefik(ctx context.Context, a *autheliav1alpha1.Authelia) error {
+	if a.Spec.Traefik == nil {
+		return nil
+	}
+	for _, desired := range []*unstructured.Unstructured{
+		buildForwardAuthMiddleware(a),
+		buildIngressRoute(a),
+	} {
+		spec := desired.Object["spec"]
+		labels := desired.GetLabels()
+
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(desired.GroupVersionKind())
+		obj.SetName(desired.GetName())
+		obj.SetNamespace(desired.GetNamespace())
+
+		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+			obj.SetLabels(labels)
+			obj.Object["spec"] = spec
+			return controllerutil.SetControllerReference(a, obj, r.Scheme)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *AutheliaReconciler) reconcileConfigMap(ctx context.Context, a *autheliav1alpha1.Authelia, rendered string) error {
@@ -263,8 +276,8 @@ func (r *AutheliaReconciler) reconcileService(ctx context.Context, a *autheliav1
 	return err
 }
 
-func (r *AutheliaReconciler) reconcileDeployment(ctx context.Context, a *autheliav1alpha1.Authelia, oidcEnabled bool) (int32, error) {
-	desired := buildDeployment(a, oidcEnabled)
+func (r *AutheliaReconciler) reconcileDeployment(ctx context.Context, a *autheliav1alpha1.Authelia, oidcEnabled bool, configChecksum string) (int32, error) {
+	desired := buildDeployment(a, oidcEnabled, configChecksum)
 	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, dep, func() error {
 		dep.Labels = desired.Labels

@@ -17,9 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha512"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -36,6 +39,30 @@ const (
 )
 
 const alphanumeric = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+// pbkdf2Iterations matches Authelia's default for PBKDF2-SHA512.
+const pbkdf2Iterations = 310000
+
+// crypt64 is the "adapted base64" alphabet used by Authelia/go-crypt for PBKDF2
+// digests: standard base64 with '+' replaced by '.', no padding.
+var crypt64 = base64.NewEncoding("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789./").WithPadding(base64.NoPadding)
+
+// hashClientSecret hashes an OIDC client secret as PBKDF2-SHA512 in the digest
+// format Authelia accepts (equivalent to
+// `authelia crypto hash generate pbkdf2 --variant sha512`). PBKDF2 is the
+// recommended scheme for client secrets as they are verified on every token
+// request.
+func hashClientSecret(secret string) (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	key, err := pbkdf2.Key(sha512.New, secret, salt, pbkdf2Iterations, sha512.Size)
+	if err != nil {
+		return "", fmt.Errorf("deriving pbkdf2 key: %w", err)
+	}
+	return fmt.Sprintf("$pbkdf2-sha512$%d$%s$%s", pbkdf2Iterations, crypt64.EncodeToString(salt), crypt64.EncodeToString(key)), nil
+}
 
 // coreSecretName resolves the name of the Secret holding Authelia's core
 // secrets: the user-provided existing Secret, or the operator-managed one.

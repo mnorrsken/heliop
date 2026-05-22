@@ -7,6 +7,13 @@ metadata:
   name: authelia
   namespace: authelia
 spec:
+  # Portal FQDN: used for the session cookie authelia_url and Traefik IngressRoute.
+  hostname: sso.example.com
+  # Generate a Traefik IngressRoute (portal) and a forwardAuth Middleware
+  # "authelia-forwardauth". Remove this block if not using Traefik.
+  traefik:
+    entryPoints:
+      - websecure
   deployment:
     replicas: 2
     image: ghcr.io/authelia/authelia:4
@@ -44,7 +51,6 @@ spec:
   # cookies list is not supplied. The Redis session store stays in config below.
   session:
     domain: example.com
-    hostname: sso.example.com
     defaultRedirectionURL: https://www.example.com
     # redis is copied verbatim into session.redis; password via redisSecretName.
     redis:

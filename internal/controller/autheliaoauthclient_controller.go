@@ -68,17 +68,27 @@ func (r *AutheliaOAuthClientReconciler) Reconcile(ctx context.Context, req ctrl.
 			secret.Data = map[string][]byte{}
 		}
 		secret.Data["client_id"] = []byte(clientID)
-		// Generate the client secret once for confidential clients; never rotate
-		// it on subsequent reconciles. Public clients have no secret.
-		if !oauthClient.Spec.Public && len(secret.Data["client_secret"]) == 0 {
+		if oauthClient.Spec.Public {
+			// Public clients have no secret.
+			delete(secret.Data, "client_secret")
+			delete(secret.Data, "client_secret_digest")
+			return controllerutil.SetControllerReference(&oauthClient, secret, r.Scheme)
+		}
+		// Generate the client secret and its PBKDF2 digest once; never rotate
+		// them on subsequent reconciles so the rendered config stays stable.
+		if len(secret.Data["client_secret"]) == 0 {
 			generated, genErr := generateSecret()
 			if genErr != nil {
 				return genErr
 			}
 			secret.Data["client_secret"] = []byte(generated)
 		}
-		if oauthClient.Spec.Public {
-			delete(secret.Data, "client_secret")
+		if len(secret.Data["client_secret_digest"]) == 0 {
+			digest, hashErr := hashClientSecret(string(secret.Data["client_secret"]))
+			if hashErr != nil {
+				return hashErr
+			}
+			secret.Data["client_secret_digest"] = []byte(digest)
 		}
 		return controllerutil.SetControllerReference(&oauthClient, secret, r.Scheme)
 	})

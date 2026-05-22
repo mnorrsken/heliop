@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -28,33 +30,23 @@ import (
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
 )
 
-// oidcClient pairs an OAuth client resource with the environment variable name
-// used to expose its generated secret to the Authelia container.
-type oidcClient struct {
-	spec    autheliav1alpha1.AutheliaOAuthClientSpec
-	envName string
+// configChecksum returns a short hex digest of the rendered configuration, used
+// as a pod-template annotation so config changes trigger a Deployment rollout.
+func configChecksum(rendered string) string {
+	sum := sha256.Sum256([]byte(rendered))
+	return hex.EncodeToString(sum[:])
 }
 
-// envVarName derives a stable, shell-safe environment variable name for a
-// client ID, e.g. "argocd-cli" -> "OIDCC_ARGOCD_CLI".
-func envVarName(clientID string) string {
-	var b strings.Builder
-	b.WriteString("OIDCC_")
-	for _, r := range strings.ToUpper(clientID) {
-		switch {
-		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
+// oidcClient pairs an OAuth client resource with the PBKDF2 digest of its
+// generated secret (empty for public clients).
+type oidcClient struct {
+	spec         autheliav1alpha1.AutheliaOAuthClientSpec
+	secretDigest string
 }
 
 // clientToMap converts a client spec into the map structure expected under
-// identity_providers.oidc.clients in the Authelia configuration. Secret clients
-// reference their plaintext secret through the envhash shell function rendered
-// by the Deployment's init container.
+// identity_providers.oidc.clients in the Authelia configuration. Confidential
+// clients embed the pre-hashed PBKDF2 digest of their secret.
 func clientToMap(c oidcClient) map[string]any {
 	m := map[string]any{
 		"client_id": c.spec.ClientID,
@@ -65,7 +57,7 @@ func clientToMap(c oidcClient) map[string]any {
 	if c.spec.Public {
 		m["public"] = true
 	} else {
-		m["client_secret"] = fmt.Sprintf("$(envhash %s)", c.envName)
+		m["client_secret"] = c.secretDigest
 	}
 	if c.spec.AuthorizationPolicy != "" {
 		m["authorization_policy"] = c.spec.AuthorizationPolicy
@@ -111,7 +103,7 @@ func toIfaceSlice(in []string) []any {
 // renderConfig parses the user-supplied configuration, merges the first factor
 // authentication backend (when set), injects the OIDC clients under
 // identity_providers.oidc.clients, and returns the resulting YAML.
-func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec, session *autheliav1alpha1.SessionSpec) (string, error) {
+func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec, session *autheliav1alpha1.SessionSpec, hostname string) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(base) != "" {
 		if err := yaml.Unmarshal([]byte(base), &root); err != nil {
@@ -126,7 +118,7 @@ func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.A
 	}
 
 	if session != nil {
-		if err := applySession(root, session); err != nil {
+		if err := applySession(root, session, hostname); err != nil {
 			return "", err
 		}
 	}
@@ -197,7 +189,7 @@ func applyAuthenticationBackend(root map[string]any, backend *autheliav1alpha1.A
 // sibling keys (e.g. session.redis). When no explicit cookies list is given but
 // a domain is set, a sensible default cookie is generated from domain and
 // hostname (defaulting to auth.<domain>).
-func applySession(root map[string]any, s *autheliav1alpha1.SessionSpec) error {
+func applySession(root map[string]any, s *autheliav1alpha1.SessionSpec, hostname string) error {
 	session := childMap(root, "session")
 
 	setIf(session, "name", s.Name)
@@ -214,7 +206,6 @@ func applySession(root map[string]any, s *autheliav1alpha1.SessionSpec) error {
 		}
 		session["cookies"] = v
 	case s.Domain != "":
-		hostname := s.Hostname
 		if hostname == "" {
 			hostname = "auth." + s.Domain
 		}

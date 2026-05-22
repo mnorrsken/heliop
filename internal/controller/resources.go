@@ -26,24 +26,7 @@ import (
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
 )
 
-// initRenderScript renders /configuration.yaml through a shell here-doc so that
-// $(envhash NAME) calls resolve OIDC client secrets to their Authelia password
-// hashes at container start. Mirrors template/authelia/core/deployment.yaml.
-const initRenderScript = `(
-  cat <<'EOF'
-function envhash() {
-  authelia crypto hash generate --password "$(eval "echo \"\$$1\"")" | awk '{ print $2 }'
-}
-EOF
-  EOFS=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 13)
-  echo "cat <<${EOFS}"
-  cat /configuration.yaml
-  echo "${EOFS}"
-) | sh > /rendered-config/configuration.yaml`
-
 func configMapName(a *autheliav1alpha1.Authelia) string { return a.Name + "-config" }
-
-func oidcSecretName(a *autheliav1alpha1.Authelia) string { return a.Name + "-oidc-clients" }
 
 func dataPVCName(a *autheliav1alpha1.Authelia) string { return a.Name + "-data" }
 
@@ -104,7 +87,7 @@ func defaultResources() corev1.ResourceRequirements {
 }
 
 // buildConfigMap holds the rendered Authelia configuration consumed by the
-// Deployment's init container.
+// Authelia container.
 func buildConfigMap(a *autheliav1alpha1.Authelia, renderedConfig string) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -115,20 +98,6 @@ func buildConfigMap(a *autheliav1alpha1.Authelia, renderedConfig string) *corev1
 		Data: map[string]string{
 			"configuration.yaml": renderedConfig,
 		},
-	}
-}
-
-// buildOIDCSecret aggregates the plaintext OIDC client secrets into a single
-// Secret in the Authelia namespace, exposed to the init container via envFrom.
-func buildOIDCSecret(a *autheliav1alpha1.Authelia, data map[string][]byte) *corev1.Secret {
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      oidcSecretName(a),
-			Namespace: a.Namespace,
-			Labels:    labelsFor(a),
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: data,
 	}
 }
 
@@ -152,7 +121,7 @@ func buildService(a *autheliav1alpha1.Authelia) *corev1.Service {
 	}
 }
 
-func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool) *appsv1.Deployment {
+func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool, configChecksum string) *appsv1.Deployment {
 	d := a.Spec.Deployment
 	replicas := int32(2)
 	if d.Replicas != nil {
@@ -211,8 +180,7 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool) *appsv1.Dep
 	}
 	volumes := []corev1.Volume{
 		{Name: "authelia-secret", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}},
-		{Name: "config", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: "config-template", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(a)}}}},
+		{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(a)}}}},
 		{Name: "data", VolumeSource: dataVolume},
 	}
 
@@ -250,23 +218,12 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool) *appsv1.Dep
 			RevisionHistoryLimit: ptr(int32(1)),
 			Selector:             &metav1.LabelSelector{MatchLabels: selectorFor(a)},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      podLabels,
+					Annotations: map[string]string{"heliop.snosr.se/config-checksum": configChecksum},
+				},
 				Spec: corev1.PodSpec{
 					EnableServiceLinks: ptr(false),
-					InitContainers: []corev1.Container{{
-						Name:            "init",
-						Image:           image,
-						ImagePullPolicy: pullPolicy,
-						Command:         []string{"sh", "-xec", initRenderScript},
-						EnvFrom: []corev1.EnvFromSource{
-							{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: secretName}}},
-							{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: oidcSecretName(a)}}},
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							{Name: "config", MountPath: "/rendered-config"},
-							{Name: "config-template", MountPath: "/configuration.yaml", SubPath: "configuration.yaml", ReadOnly: true},
-						},
-					}},
 					Containers: []corev1.Container{{
 						Name:            "authelia",
 						Image:           image,

@@ -24,12 +24,11 @@ import (
 
 // AutheliaSpec defines the desired state of Authelia
 // +kubebuilder:validation:XValidation:rule="!has(self.traefik) || has(self.hostname)",message="hostname is required when traefik is set"
-// +kubebuilder:validation:XValidation:rule="!has(self.hostname) || !has(self.session) || !has(self.session.domain) || self.hostname == self.session.domain || self.hostname.endsWith('.' + self.session.domain)",message="hostname must equal or be a subdomain of session.domain"
 type AutheliaSpec struct {
 	// hostname is the fully qualified hostname where the Authelia portal is
-	// served (e.g. auth.example.com). It is used as the session cookie
-	// authelia_url and as the Traefik IngressRoute host. Must equal or be a
-	// subdomain of session.domain.
+	// served (e.g. auth.example.com). It is used to generate a default session
+	// cookie (authelia_url https://<hostname>, cookie domain the parent domain)
+	// and as the Traefik IngressRoute host.
 	// +optional
 	Hostname string `json:"hostname,omitempty"`
 
@@ -44,11 +43,15 @@ type AutheliaSpec struct {
 	// +optional
 	AuthenticationBackend *AuthenticationBackendSpec `json:"authenticationBackend,omitempty"`
 
-	// session configures the session cookies. When set, the operator merges it
-	// into the session configuration, generating a sensible default cookie from
-	// hostname and session.domain when an explicit cookies list is not provided.
+	// session is the Authelia session configuration, merged verbatim into the
+	// "session" config section (see
+	// https://www.authelia.com/configuration/session/introduction/). When no
+	// cookie is configured here or in config, the operator generates a default
+	// one from hostname. The session secret is always supplied via
+	// AUTHELIA_SESSION_SECRET_FILE, and the Redis password via
+	// deployment.redisSecretName.
 	// +optional
-	Session *SessionSpec `json:"session,omitempty"`
+	Session *runtime.RawExtension `json:"session,omitempty"`
 
 	// traefik, when set, makes the operator generate a Traefik IngressRoute for
 	// the portal (at hostname) and a forwardAuth Middleware named
@@ -97,97 +100,33 @@ type AuthenticationBackendSpec struct {
 // https://www.authelia.com/configuration/first-factor/file/
 type FileAuthenticationBackend struct {
 	// usersSecret references the Secret key holding the users database YAML. It
-	// is mounted into the container and referenced as
-	// authentication_backend.file.path.
+	// is mounted into the container; the operator sets
+	// authentication_backend.file.path to the mounted path (overriding any path
+	// in config).
 	// +required
 	UsersSecret SecretKeyRef `json:"usersSecret"`
 
-	// watch enables watching the users file for changes.
+	// config is merged verbatim into authentication_backend.file (e.g. watch,
+	// search, password). See the Authelia file backend reference.
 	// +optional
-	Watch *bool `json:"watch,omitempty"`
-
-	// search configures user search behaviour.
-	// +optional
-	Search *FileSearch `json:"search,omitempty"`
-
-	// password configures password hashing options, passed through verbatim to
-	// authentication_backend.file.password.
-	// +optional
-	Password *runtime.RawExtension `json:"password,omitempty"`
-}
-
-// FileSearch configures user search behaviour for the file backend.
-type FileSearch struct {
-	// email allows users to authenticate using their email address.
-	// +optional
-	Email *bool `json:"email,omitempty"`
-
-	// caseInsensitive enables case-insensitive username matching.
-	// +optional
-	CaseInsensitive *bool `json:"caseInsensitive,omitempty"`
+	Config *runtime.RawExtension `json:"config,omitempty"`
 }
 
 // LDAPAuthenticationBackend configures the LDAP first factor backend.
 // https://www.authelia.com/configuration/first-factor/ldap/
 type LDAPAuthenticationBackend struct {
-	// address is the LDAP server URL, e.g. "ldap://lldap:3890".
-	// +required
-	Address string `json:"address"`
-
-	// baseDN is the base distinguished name container for queries.
-	// +required
-	BaseDN string `json:"baseDN"`
-
-	// user is the distinguished name used to bind to the directory.
-	// +required
-	User string `json:"user"`
-
-	// passwordSecret references the Secret key holding the bind password.
+	// passwordSecret references the Secret key holding the bind password. It is
+	// mounted as a file and referenced via the
+	// AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable, so
+	// the password is never written into the config.
 	// +required
 	PasswordSecret SecretKeyRef `json:"passwordSecret"`
 
-	// implementation selects the LDAP implementation, e.g. "lldap", "custom" or
-	// "activedirectory".
+	// config is merged verbatim into authentication_backend.ldap (e.g. address,
+	// base_dn, user, implementation, filters, attributes, tls). See the Authelia
+	// LDAP backend reference. Do not set the password here.
 	// +optional
-	Implementation string `json:"implementation,omitempty"`
-
-	// additionalUsersDN is the OU path appended to baseDN for user searches.
-	// +optional
-	AdditionalUsersDN string `json:"additionalUsersDN,omitempty"`
-
-	// usersFilter is the LDAP filter selecting valid users.
-	// +optional
-	UsersFilter string `json:"usersFilter,omitempty"`
-
-	// additionalGroupsDN is the OU path appended to baseDN for group searches.
-	// +optional
-	AdditionalGroupsDN string `json:"additionalGroupsDN,omitempty"`
-
-	// groupsFilter is the LDAP filter selecting groups.
-	// +optional
-	GroupsFilter string `json:"groupsFilter,omitempty"`
-
-	// groupSearchMode selects the group discovery method (default "filter").
-	// +optional
-	GroupSearchMode string `json:"groupSearchMode,omitempty"`
-
-	// startTLS enables the StartTLS process on the connection.
-	// +optional
-	StartTLS *bool `json:"startTLS,omitempty"`
-
-	// timeout is the connection dial timeout, e.g. "5s".
-	// +optional
-	Timeout string `json:"timeout,omitempty"`
-
-	// attributes maps directory attributes, passed through verbatim to
-	// authentication_backend.ldap.attributes.
-	// +optional
-	Attributes *runtime.RawExtension `json:"attributes,omitempty"`
-
-	// tls configures TLS verification, passed through verbatim to
-	// authentication_backend.ldap.tls.
-	// +optional
-	TLS *runtime.RawExtension `json:"tls,omitempty"`
+	Config *runtime.RawExtension `json:"config,omitempty"`
 }
 
 // TraefikSpec configures generation of Traefik resources for Authelia.
@@ -197,55 +136,6 @@ type TraefikSpec struct {
 	// on. Defaults to ["websecure"].
 	// +optional
 	EntryPoints []string `json:"entryPoints,omitempty"`
-}
-
-// SessionSpec configures Authelia session cookies.
-// https://www.authelia.com/configuration/session/introduction/
-type SessionSpec struct {
-	// domain is the cookie domain (e.g. example.com). When set and cookies is
-	// not provided, the operator generates a default cookie for this domain
-	// using the top-level hostname as authelia_url.
-	// +optional
-	Domain string `json:"domain,omitempty"`
-
-	// defaultRedirectionURL is the URL users are redirected to after
-	// authenticating when no target is supplied. Optional.
-	// +optional
-	DefaultRedirectionURL string `json:"defaultRedirectionURL,omitempty"`
-
-	// name is the session cookie name (Authelia default: authelia_session).
-	// +optional
-	Name string `json:"name,omitempty"`
-
-	// sameSite is the cookie SameSite policy: lax, strict or none (default lax).
-	// +optional
-	// +kubebuilder:validation:Enum=lax;strict;none
-	SameSite string `json:"sameSite,omitempty"`
-
-	// inactivity is the inactivity timeout, e.g. "5 minutes" (default 5m).
-	// +optional
-	Inactivity string `json:"inactivity,omitempty"`
-
-	// expiration is the session expiration, e.g. "1 hour" (default 1h).
-	// +optional
-	Expiration string `json:"expiration,omitempty"`
-
-	// rememberMe is the remember-me duration, e.g. "1 month" (default 1mo).
-	// Set to "0" to disable the remember-me feature.
-	// +optional
-	RememberMe string `json:"rememberMe,omitempty"`
-
-	// cookies, when set, replaces the generated cookie list and is passed
-	// through verbatim to session.cookies.
-	// +optional
-	Cookies *runtime.RawExtension `json:"cookies,omitempty"`
-
-	// redis configures the Redis session provider, passed through verbatim to
-	// session.redis. The password should be provided separately via
-	// deployment.redisSecretName.
-	// https://www.authelia.com/configuration/session/redis/
-	// +optional
-	Redis *runtime.RawExtension `json:"redis,omitempty"`
 }
 
 // AutheliaDeploymentSpec configures the generated Authelia Deployment.

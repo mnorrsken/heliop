@@ -26,33 +26,36 @@ spec:
     postgresSecretName: authelia-db-app
     redisSecretName: redis-ha
     smtpPassword: true
-  # First factor backend. The operator renders this into authentication_backend
-  # and mounts the referenced Secret(s). The LDAP bind password is mounted as a
-  # file and exposed via AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE.
+  # First factor backend. config is merged verbatim into authentication_backend;
+  # the operator only handles the referenced Secret(s): the LDAP bind password is
+  # mounted and exposed via AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE.
   authenticationBackend:
     ldap:
-      implementation: lldap
-      address: ldap://lldap:3890
-      baseDN: DC=example,DC=com
-      user: UID=read,OU=people,DC=example,DC=com
       passwordSecret:
         name: authelia-ldap
         key: password
-    # Alternatively, a file backend sourced from a Secret (mutually exclusive
-    # with ldap). The key is mounted as a file and used as file.path:
+      config:
+        implementation: lldap
+        address: ldap://lldap:3890
+        base_dn: DC=example,DC=com
+        user: UID=read,OU=people,DC=example,DC=com
+    # Alternatively, a file backend (mutually exclusive with ldap). usersSecret is
+    # mounted and set as file.path; config is merged verbatim:
     # file:
     #   usersSecret:
     #     name: authelia-users
     #     key: users_database.yml
-    #   search:
-    #     email: true
-    #     caseInsensitive: true
-  # Session cookies. domain + hostname generate a default cookie when an explicit
-  # cookies list is not supplied. The Redis session store stays in config below.
+    #   config:
+    #     search:
+    #       email: true
+    #       case_insensitive: true
+  # session is merged verbatim into the Authelia "session" config. A default
+  # cookie is generated from hostname (authelia_url https://sso.example.com,
+  # domain example.com) when no cookies are specified here. The session secret
+  # comes from AUTHELIA_SESSION_SECRET_FILE; the Redis password from
+  # deployment.redisSecretName.
   session:
-    domain: example.com
-    defaultRedirectionURL: https://www.example.com
-    # redis is copied verbatim into session.redis; password via redisSecretName.
+    expiration: 1 hour
     redis:
       host: redis
       port: 6379

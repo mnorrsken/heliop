@@ -61,29 +61,18 @@ spec:
                       file configures the file-based backend. The users database is sourced from
                       a Secret and mounted into the Authelia container.
                     properties:
-                      password:
+                      config:
                         description: |-
-                          password configures password hashing options, passed through verbatim to
-                          authentication_backend.file.password.
+                          config is merged verbatim into authentication_backend.file (e.g. watch,
+                          search, password). See the Authelia file backend reference.
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
-                      search:
-                        description: search configures user search behaviour.
-                        properties:
-                          caseInsensitive:
-                            description: caseInsensitive enables case-insensitive
-                              username matching.
-                            type: boolean
-                          email:
-                            description: email allows users to authenticate using
-                              their email address.
-                            type: boolean
-                        type: object
                       usersSecret:
                         description: |-
                           usersSecret references the Secret key holding the users database YAML. It
-                          is mounted into the container and referenced as
-                          authentication_backend.file.path.
+                          is mounted into the container; the operator sets
+                          authentication_backend.file.path to the mounted path (overriding any path
+                          in config).
                         properties:
                           key:
                             description: key is the key within the Secret.
@@ -95,9 +84,6 @@ spec:
                         - key
                         - name
                         type: object
-                      watch:
-                        description: watch enables watching the users file for changes.
-                        type: boolean
                     required:
                     - usersSecret
                     type: object
@@ -107,42 +93,19 @@ spec:
                       Secret, mounted as a file, and referenced via the
                       AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable.
                     properties:
-                      additionalGroupsDN:
-                        description: additionalGroupsDN is the OU path appended to
-                          baseDN for group searches.
-                        type: string
-                      additionalUsersDN:
-                        description: additionalUsersDN is the OU path appended to
-                          baseDN for user searches.
-                        type: string
-                      address:
-                        description: address is the LDAP server URL, e.g. "ldap://lldap:3890".
-                        type: string
-                      attributes:
+                      config:
                         description: |-
-                          attributes maps directory attributes, passed through verbatim to
-                          authentication_backend.ldap.attributes.
+                          config is merged verbatim into authentication_backend.ldap (e.g. address,
+                          base_dn, user, implementation, filters, attributes, tls). See the Authelia
+                          LDAP backend reference. Do not set the password here.
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
-                      baseDN:
-                        description: baseDN is the base distinguished name container
-                          for queries.
-                        type: string
-                      groupSearchMode:
-                        description: groupSearchMode selects the group discovery method
-                          (default "filter").
-                        type: string
-                      groupsFilter:
-                        description: groupsFilter is the LDAP filter selecting groups.
-                        type: string
-                      implementation:
-                        description: |-
-                          implementation selects the LDAP implementation, e.g. "lldap", "custom" or
-                          "activedirectory".
-                        type: string
                       passwordSecret:
-                        description: passwordSecret references the Secret key holding
-                          the bind password.
+                        description: |-
+                          passwordSecret references the Secret key holding the bind password. It is
+                          mounted as a file and referenced via the
+                          AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable, so
+                          the password is never written into the config.
                         properties:
                           key:
                             description: key is the key within the Secret.
@@ -154,33 +117,8 @@ spec:
                         - key
                         - name
                         type: object
-                      startTLS:
-                        description: startTLS enables the StartTLS process on the
-                          connection.
-                        type: boolean
-                      timeout:
-                        description: timeout is the connection dial timeout, e.g.
-                          "5s".
-                        type: string
-                      tls:
-                        description: |-
-                          tls configures TLS verification, passed through verbatim to
-                          authentication_backend.ldap.tls.
-                        type: object
-                        x-kubernetes-preserve-unknown-fields: true
-                      user:
-                        description: user is the distinguished name used to bind to
-                          the directory.
-                        type: string
-                      usersFilter:
-                        description: usersFilter is the LDAP filter selecting valid
-                          users.
-                        type: string
                     required:
-                    - address
-                    - baseDN
                     - passwordSecret
-                    - user
                     type: object
                 type: object
                 x-kubernetes-validations:
@@ -507,67 +445,21 @@ spec:
               hostname:
                 description: |-
                   hostname is the fully qualified hostname where the Authelia portal is
-                  served (e.g. auth.example.com). It is used as the session cookie
-                  authelia_url and as the Traefik IngressRoute host. Must equal or be a
-                  subdomain of session.domain.
+                  served (e.g. auth.example.com). It is used to generate a default session
+                  cookie (authelia_url https://<hostname>, cookie domain the parent domain)
+                  and as the Traefik IngressRoute host.
                 type: string
               session:
                 description: |-
-                  session configures the session cookies. When set, the operator merges it
-                  into the session configuration, generating a sensible default cookie from
-                  hostname and session.domain when an explicit cookies list is not provided.
-                properties:
-                  cookies:
-                    description: |-
-                      cookies, when set, replaces the generated cookie list and is passed
-                      through verbatim to session.cookies.
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  defaultRedirectionURL:
-                    description: |-
-                      defaultRedirectionURL is the URL users are redirected to after
-                      authenticating when no target is supplied. Optional.
-                    type: string
-                  domain:
-                    description: |-
-                      domain is the cookie domain (e.g. example.com). When set and cookies is
-                      not provided, the operator generates a default cookie for this domain
-                      using the top-level hostname as authelia_url.
-                    type: string
-                  expiration:
-                    description: expiration is the session expiration, e.g. "1 hour"
-                      (default 1h).
-                    type: string
-                  inactivity:
-                    description: inactivity is the inactivity timeout, e.g. "5 minutes"
-                      (default 5m).
-                    type: string
-                  name:
-                    description: 'name is the session cookie name (Authelia default:
-                      authelia_session).'
-                    type: string
-                  redis:
-                    description: |-
-                      redis configures the Redis session provider, passed through verbatim to
-                      session.redis. The password should be provided separately via
-                      deployment.redisSecretName.
-                      https://www.authelia.com/configuration/session/redis/
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                  rememberMe:
-                    description: |-
-                      rememberMe is the remember-me duration, e.g. "1 month" (default 1mo).
-                      Set to "0" to disable the remember-me feature.
-                    type: string
-                  sameSite:
-                    description: 'sameSite is the cookie SameSite policy: lax, strict
-                      or none (default lax).'
-                    enum:
-                    - lax
-                    - strict
-                    - none
-                    type: string
+                  session is the Authelia session configuration, merged verbatim into the
+                  "session" config section (see
+                  https://www.authelia.com/configuration/session/introduction/). When no
+                  cookie is configured here or in config, the operator generates a default
+                  one from hostname. The session secret is always supplied via
+                  AUTHELIA_SESSION_SECRET_FILE, and the Redis password via
+                  deployment.redisSecretName.
                 type: object
+                x-kubernetes-preserve-unknown-fields: true
               traefik:
                 description: |-
                   traefik, when set, makes the operator generate a Traefik IngressRoute for
@@ -589,10 +481,6 @@ spec:
             x-kubernetes-validations:
             - message: hostname is required when traefik is set
               rule: '!has(self.traefik) || has(self.hostname)'
-            - message: hostname must equal or be a subdomain of session.domain
-              rule: '!has(self.hostname) || !has(self.session) || !has(self.session.domain)
-                || self.hostname == self.session.domain || self.hostname.endsWith(''.''
-                + self.session.domain)'
           status:
             description: status defines the observed state of Authelia
             properties:

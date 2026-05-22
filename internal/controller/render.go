@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -103,7 +104,7 @@ func toIfaceSlice(in []string) []any {
 // renderConfig parses the user-supplied configuration, merges the first factor
 // authentication backend (when set), injects the OIDC clients under
 // identity_providers.oidc.clients, and returns the resulting YAML.
-func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec, session *autheliav1alpha1.SessionSpec, hostname string) (string, error) {
+func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec, session *runtime.RawExtension, hostname string) (string, error) {
 	root := map[string]any{}
 	if strings.TrimSpace(base) != "" {
 		if err := yaml.Unmarshal([]byte(base), &root); err != nil {
@@ -117,10 +118,8 @@ func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.A
 		}
 	}
 
-	if session != nil {
-		if err := applySession(root, session, hostname); err != nil {
-			return "", err
-		}
+	if err := applySession(root, session, hostname); err != nil {
+		return "", err
 	}
 
 	if len(clients) > 0 {
@@ -185,109 +184,77 @@ func applyAuthenticationBackend(root map[string]any, backend *autheliav1alpha1.A
 	return nil
 }
 
-// applySession merges the session configuration into the config, preserving
-// sibling keys (e.g. session.redis). When no explicit cookies list is given but
-// a domain is set, a sensible default cookie is generated from domain and
-// hostname (defaulting to auth.<domain>).
-func applySession(root map[string]any, s *autheliav1alpha1.SessionSpec, hostname string) error {
-	session := childMap(root, "session")
-
-	setIf(session, "name", s.Name)
-	setIf(session, "same_site", s.SameSite)
-	setIf(session, "inactivity", s.Inactivity)
-	setIf(session, "expiration", s.Expiration)
-	setIf(session, "remember_me", s.RememberMe)
-
-	switch {
-	case s.Cookies != nil:
-		var v any
-		if err := json.Unmarshal(s.Cookies.Raw, &v); err != nil {
-			return fmt.Errorf("decoding session.cookies: %w", err)
-		}
-		session["cookies"] = v
-	case s.Domain != "":
-		if hostname == "" {
-			hostname = "auth." + s.Domain
-		}
-		cookie := map[string]any{
-			"domain":       s.Domain,
-			"authelia_url": "https://" + hostname,
-		}
-		setIf(cookie, "default_redirection_url", s.DefaultRedirectionURL)
-		session["cookies"] = []any{cookie}
+// applySession merges the user-provided session dict (verbatim) into the config
+// session section, then ensures a cookie exists: if none is configured (here or
+// in config) and a hostname is given, a default cookie is generated with
+// authelia_url https://<hostname> and the parent domain of hostname.
+func applySession(root map[string]any, sessionRaw *runtime.RawExtension, hostname string) error {
+	if (sessionRaw == nil || len(sessionRaw.Raw) == 0) && hostname == "" {
+		return nil
 	}
 
-	if err := setRaw(session, "redis", s.Redis); err != nil {
-		return err
+	session := childMap(root, "session")
+
+	if sessionRaw != nil && len(sessionRaw.Raw) > 0 {
+		var user map[string]any
+		if err := json.Unmarshal(sessionRaw.Raw, &user); err != nil {
+			return fmt.Errorf("decoding session: %w", err)
+		}
+		maps.Copy(session, user)
+	}
+
+	if hostname != "" {
+		if _, ok := session["cookies"]; !ok {
+			session["cookies"] = []any{map[string]any{
+				"domain":       parentDomain(hostname),
+				"authelia_url": "https://" + hostname,
+			}}
+		}
 	}
 	return nil
 }
 
+// parentDomain returns the cookie domain for a portal hostname: the hostname
+// with its first label stripped (auth.example.com -> example.com), or the
+// hostname unchanged when it has no subdomain.
+func parentDomain(hostname string) string {
+	if i := strings.IndexByte(hostname, '.'); i >= 0 && i < len(hostname)-1 {
+		return hostname[i+1:]
+	}
+	return hostname
+}
+
+// fileBackendMap merges the verbatim file config and forces path to the mounted
+// users Secret location (operator-controlled).
 func fileBackendMap(f *autheliav1alpha1.FileAuthenticationBackend) (map[string]any, error) {
-	m := map[string]any{
-		"path": fileUsersPath(f.UsersSecret),
-	}
-	if f.Watch != nil {
-		m["watch"] = *f.Watch
-	}
-	if f.Search != nil {
-		search := map[string]any{}
-		if f.Search.Email != nil {
-			search["email"] = *f.Search.Email
-		}
-		if f.Search.CaseInsensitive != nil {
-			search["case_insensitive"] = *f.Search.CaseInsensitive
-		}
-		if len(search) > 0 {
-			m["search"] = search
-		}
-	}
-	if err := setRaw(m, "password", f.Password); err != nil {
+	m := map[string]any{}
+	if err := mergeRaw(m, f.Config); err != nil {
 		return nil, err
 	}
+	m["path"] = fileUsersPath(f.UsersSecret)
 	return m, nil
 }
 
+// ldapBackendMap merges the verbatim ldap config. The bind password is supplied
+// through the *_PASSWORD_FILE environment variable, never the config.
 func ldapBackendMap(l *autheliav1alpha1.LDAPAuthenticationBackend) (map[string]any, error) {
-	m := map[string]any{
-		"address": l.Address,
-		"base_dn": l.BaseDN,
-		"user":    l.User,
-	}
-	setIf(m, "implementation", l.Implementation)
-	setIf(m, "additional_users_dn", l.AdditionalUsersDN)
-	setIf(m, "users_filter", l.UsersFilter)
-	setIf(m, "additional_groups_dn", l.AdditionalGroupsDN)
-	setIf(m, "groups_filter", l.GroupsFilter)
-	setIf(m, "group_search_mode", l.GroupSearchMode)
-	setIf(m, "timeout", l.Timeout)
-	if l.StartTLS != nil {
-		m["start_tls"] = *l.StartTLS
-	}
-	if err := setRaw(m, "attributes", l.Attributes); err != nil {
+	m := map[string]any{}
+	if err := mergeRaw(m, l.Config); err != nil {
 		return nil, err
 	}
-	if err := setRaw(m, "tls", l.TLS); err != nil {
-		return nil, err
-	}
+	delete(m, "password")
 	return m, nil
 }
 
-func setIf(m map[string]any, key, value string) {
-	if value != "" {
-		m[key] = value
-	}
-}
-
-// setRaw decodes a RawExtension passthrough field into the target map under key.
-func setRaw(m map[string]any, key string, raw *runtime.RawExtension) error {
+// mergeRaw decodes a RawExtension object and copies its keys into dst.
+func mergeRaw(dst map[string]any, raw *runtime.RawExtension) error {
 	if raw == nil || len(raw.Raw) == 0 {
 		return nil
 	}
-	var v any
+	var v map[string]any
 	if err := json.Unmarshal(raw.Raw, &v); err != nil {
-		return fmt.Errorf("decoding %s: %w", key, err)
+		return fmt.Errorf("decoding config: %w", err)
 	}
-	m[key] = v
+	maps.Copy(dst, v)
 	return nil
 }

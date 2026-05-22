@@ -79,6 +79,8 @@ metadata:
   name: authelia
   namespace: authelia
 spec:
+  # Portal FQDN; generates the default session cookie (and the Traefik route).
+  hostname: sso.example.com
   deployment:
     replicas: 1
     # existingSecret omitted -> core secrets generated into "authelia-secrets"
@@ -92,16 +94,16 @@ spec:
       usersSecret:
         name: authelia-users
         key: users_database.yml
+  # session is merged verbatim into the Authelia session config; the cookie is
+  # generated from hostname since none is specified here.
+  session:
+    expiration: 1 hour
   config: |
     server:
       address: 'tcp://0.0.0.0:9091/'
     storage:
       local:
         path: '/data/db.sqlite3'
-    session:
-      cookies:
-        - domain: 'example.com'
-          authelia_url: 'https://sso.example.com'
     access_control:
       default_policy: two_factor
 ```

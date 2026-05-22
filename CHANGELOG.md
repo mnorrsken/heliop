@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-05-22
+
+### Changed
+- **Breaking:** `spec.session` is now a verbatim passthrough object (the Authelia
+  session config) instead of typed fields. The operator merges it into the
+  `session` config section and generates a default cookie from `spec.hostname`
+  (authelia_url `https://<hostname>`, cookie domain the parent domain) only when
+  no cookie is configured. Removed the typed `domain`, `name`, `sameSite`,
+  `inactivity`, `expiration`, `rememberMe`, `defaultRedirectionURL`, `cookies`
+  and `redis` fields — set these directly in the dict using Authelia's native
+  keys.
+- **Breaking:** `spec.authenticationBackend.file` and `.ldap` are thinned to a
+  typed secret reference (`usersSecret` / `passwordSecret`) plus a verbatim
+  `config` object merged into `authentication_backend.{file,ldap}`. The operator
+  forces `file.path` to the mounted users Secret and strips any `ldap.password`
+  (supplied via the `*_PASSWORD_FILE` env var). Removed the hand-modeled LDAP and
+  file fields; use Authelia's native snake_case keys under `config`.
+
 ## [0.5.0] - 2026-05-22
 
 ### Added
@@ -98,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows for linting, testing, building the controller image,
   and releasing multi-arch images to GHCR on `v*` tags.
 
+[0.6.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.6.0
 [0.5.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.5.0
 [0.4.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.4.0
 [0.3.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.3.0

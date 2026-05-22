@@ -93,15 +93,11 @@ identity_providers:
 
 func TestRenderConfigLDAPBackend(t *testing.T) {
 	base := "authentication_backend:\n  password_reset:\n    disable: true\n  ldap:\n    address: 'ldap://old'\n"
-	startTLS := true
 	backend := &autheliav1alpha1.AuthenticationBackendSpec{
 		LDAP: &autheliav1alpha1.LDAPAuthenticationBackend{
-			Address:        "ldap://lldap:3890",
-			BaseDN:         "DC=example,DC=com",
-			User:           "UID=bind,OU=people,DC=example,DC=com",
-			Implementation: "lldap",
-			StartTLS:       &startTLS,
 			PasswordSecret: autheliav1alpha1.SecretKeyRef{Name: "ldap-creds", Key: "password"},
+			Config: &runtime.RawExtension{Raw: []byte(
+				`{"address":"ldap://lldap:3890","base_dn":"DC=example,DC=com","implementation":"lldap","start_tls":true,"password":"leaked"}`)},
 		},
 	}
 
@@ -122,9 +118,6 @@ func TestRenderConfigLDAPBackend(t *testing.T) {
 	if ldap["address"] != "ldap://lldap:3890" {
 		t.Errorf("address not overridden: %v", ldap["address"])
 	}
-	if ldap["base_dn"] != "DC=example,DC=com" {
-		t.Errorf("base_dn = %v", ldap["base_dn"])
-	}
 	if ldap["start_tls"] != true {
 		t.Errorf("start_tls = %v", ldap["start_tls"])
 	}
@@ -137,6 +130,7 @@ func TestRenderConfigFileBackend(t *testing.T) {
 	backend := &autheliav1alpha1.AuthenticationBackendSpec{
 		File: &autheliav1alpha1.FileAuthenticationBackend{
 			UsersSecret: autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"},
+			Config:      &runtime.RawExtension{Raw: []byte(`{"search":{"email":true},"path":"/ignored"}`)},
 		},
 	}
 
@@ -152,18 +146,18 @@ func TestRenderConfigFileBackend(t *testing.T) {
 	file := root["authentication_backend"].(map[string]any)["file"].(map[string]any)
 	want := fileBackendMountPath + "/users_database.yml"
 	if file["path"] != want {
-		t.Errorf("file.path = %v, want %v", file["path"], want)
+		t.Errorf("file.path = %v, want %v (operator-controlled)", file["path"], want)
+	}
+	if file["search"].(map[string]any)["email"] != true {
+		t.Errorf("verbatim search config dropped: %#v", file["search"])
 	}
 }
 
-func TestRenderConfigSessionGeneratesCookie(t *testing.T) {
-	base := "session:\n  redis:\n    host: redis\n"
-	session := &autheliav1alpha1.SessionSpec{
-		Domain:     "example.com",
-		Expiration: "2 hours",
-	}
+func TestRenderConfigSessionRawMergeAndDefaultCookie(t *testing.T) {
+	// A verbatim session dict (with redis); cookie generated from hostname.
+	session := &runtime.RawExtension{Raw: []byte(`{"expiration":"2 hours","redis":{"host":"redis","database_index":2}}`)}
 
-	out, err := renderConfig(base, nil, nil, session, "")
+	out, err := renderConfig("", nil, nil, session, "sso.example.com")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -173,28 +167,25 @@ func TestRenderConfigSessionGeneratesCookie(t *testing.T) {
 		t.Fatalf("invalid yaml: %v", err)
 	}
 	s := root["session"].(map[string]any)
-	if s["redis"] == nil {
-		t.Error("sibling session.redis was dropped")
-	}
 	if s["expiration"] != "2 hours" {
 		t.Errorf("expiration = %v", s["expiration"])
 	}
-	cookies := s["cookies"].([]any)
-	if len(cookies) != 1 {
-		t.Fatalf("expected 1 cookie, got %d", len(cookies))
+	redis := s["redis"].(map[string]any)
+	if redis["host"] != "redis" || redis["database_index"] != float64(2) {
+		t.Errorf("redis not passed through verbatim: %#v", redis)
 	}
-	cookie := cookies[0].(map[string]any)
+	cookie := s["cookies"].([]any)[0].(map[string]any)
 	if cookie["domain"] != "example.com" {
-		t.Errorf("domain = %v", cookie["domain"])
+		t.Errorf("domain = %v (want parent domain of hostname)", cookie["domain"])
 	}
-	if cookie["authelia_url"] != "https://auth.example.com" {
-		t.Errorf("authelia_url = %v (want default auth.<domain>)", cookie["authelia_url"])
+	if cookie["authelia_url"] != "https://sso.example.com" {
+		t.Errorf("authelia_url = %v", cookie["authelia_url"])
 	}
 }
 
-func TestRenderConfigSessionHostnameOverride(t *testing.T) {
-	session := &autheliav1alpha1.SessionSpec{Domain: "example.com"}
-	out, err := renderConfig("", nil, nil, session, "sso.example.com")
+func TestRenderConfigSessionDefaultCookieWithoutSpec(t *testing.T) {
+	// No session spec at all, just a hostname -> default cookie still generated.
+	out, err := renderConfig("", nil, nil, nil, "auth.example.com")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -203,17 +194,15 @@ func TestRenderConfigSessionHostnameOverride(t *testing.T) {
 		t.Fatalf("invalid yaml: %v", err)
 	}
 	cookie := root["session"].(map[string]any)["cookies"].([]any)[0].(map[string]any)
-	if cookie["authelia_url"] != "https://sso.example.com" {
-		t.Errorf("authelia_url = %v", cookie["authelia_url"])
+	if cookie["domain"] != "example.com" || cookie["authelia_url"] != "https://auth.example.com" {
+		t.Errorf("unexpected default cookie: %#v", cookie)
 	}
 }
 
-func TestRenderConfigSessionRedisVerbatim(t *testing.T) {
-	session := &autheliav1alpha1.SessionSpec{
-		Domain: "example.com",
-		Redis:  &runtime.RawExtension{Raw: []byte(`{"host":"redis","port":6379,"database_index":2}`)},
-	}
-	out, err := renderConfig("", nil, nil, session, "")
+func TestRenderConfigSessionExplicitCookiesNotOverridden(t *testing.T) {
+	// User-provided cookies win over the hostname-derived default.
+	session := &runtime.RawExtension{Raw: []byte(`{"cookies":[{"domain":"corp.internal","authelia_url":"https://login.corp.internal"}]}`)}
+	out, err := renderConfig("", nil, nil, session, "sso.example.com")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -221,12 +210,9 @@ func TestRenderConfigSessionRedisVerbatim(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
 		t.Fatalf("invalid yaml: %v", err)
 	}
-	redis := root["session"].(map[string]any)["redis"].(map[string]any)
-	if redis["host"] != "redis" {
-		t.Errorf("host = %v", redis["host"])
-	}
-	if redis["database_index"] != float64(2) {
-		t.Errorf("database_index = %v", redis["database_index"])
+	cookies := root["session"].(map[string]any)["cookies"].([]any)
+	if len(cookies) != 1 || cookies[0].(map[string]any)["domain"] != "corp.internal" {
+		t.Errorf("explicit cookies were overridden: %#v", cookies)
 	}
 }
 

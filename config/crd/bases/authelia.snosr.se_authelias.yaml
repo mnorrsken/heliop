@@ -365,27 +365,27 @@ spec:
                       ldap password (supplied via the environment instead).
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
-                  fileUsersSecret:
-                    description: |-
-                      fileUsersSecret, when set, mounts the file backend users database Secret
-                      into the container and sets authentication_backend.file.path to the mounted
-                      path.
-                    properties:
-                      key:
-                        description: key is the key within the Secret.
-                        type: string
-                      name:
-                        description: name is the name of the Secret.
-                        type: string
-                    required:
-                    - key
-                    - name
-                    type: object
                   secrets:
                     description: |-
                       secrets references Secrets that Authelia loads from files. Each entry is
                       mounted and exposed via the matching AUTHELIA_*_FILE environment variable.
                     properties:
+                      fileUsersSecret:
+                        description: |-
+                          fileUsersSecret, when set, mounts the file backend users database Secret
+                          into the container and sets authentication_backend.file.path to the mounted
+                          path.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
                       ldapPassword:
                         description: |-
                           ldapPassword -> authentication_backend.ldap.password. When set, the

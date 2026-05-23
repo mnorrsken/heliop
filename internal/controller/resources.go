@@ -211,8 +211,8 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool, configCheck
 	}
 
 	// Mount the file backend users database when configured.
-	if settings.FileUsersSecret != nil {
-		volumes = append(volumes, corev1.Volume{Name: "file-backend", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: settings.FileUsersSecret.Name}}})
+	if settings.Secrets != nil && settings.Secrets.FileUsersSecret != nil {
+		volumes = append(volumes, corev1.Volume{Name: "file-backend", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: settings.Secrets.FileUsersSecret.Name}}})
 		mainMounts = append(mainMounts, corev1.VolumeMount{Name: "file-backend", MountPath: fileBackendMountPath, ReadOnly: true})
 	}
 

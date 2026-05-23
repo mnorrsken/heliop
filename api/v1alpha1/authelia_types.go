@@ -74,12 +74,6 @@ type AutheliaSettings struct {
 	// +optional
 	AdditionalConfig *runtime.RawExtension `json:"additionalConfig,omitempty"`
 
-	// fileUsersSecret, when set, mounts the file backend users database Secret
-	// into the container and sets authentication_backend.file.path to the mounted
-	// path.
-	// +optional
-	FileUsersSecret *SecretKeyRef `json:"fileUsersSecret,omitempty"`
-
 	// secrets references Secrets that Authelia loads from files. Each entry is
 	// mounted and exposed via the matching AUTHELIA_*_FILE environment variable.
 	// +optional
@@ -107,6 +101,12 @@ type AutheliaSecrets struct {
 	// postgresPassword -> storage.postgres.password.
 	// +optional
 	PostgresPassword *SecretKeyRef `json:"postgresPassword,omitempty"`
+
+	// fileUsersSecret, when set, mounts the file backend users database Secret
+	// into the container and sets authentication_backend.file.path to the mounted
+	// path.
+	// +optional
+	FileUsersSecret *SecretKeyRef `json:"fileUsersSecret,omitempty"`
 }
 
 // TraefikSpec configures generation of Traefik resources for Authelia.

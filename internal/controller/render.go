@@ -155,10 +155,10 @@ func childMap(parent map[string]any, key string) map[string]any {
 // authentication_backend.ldap.password (supplied via the environment) when
 // ldapPasswordSecret is set.
 func applyBackendSecrets(root map[string]any, settings autheliav1alpha1.AutheliaSettings) {
-	if settings.FileUsersSecret != nil {
+	if settings.Secrets != nil && settings.Secrets.FileUsersSecret != nil {
 		ab := childMap(root, "authentication_backend")
 		file := childMap(ab, "file")
-		file["path"] = fileUsersPath(*settings.FileUsersSecret)
+		file["path"] = fileUsersPath(*settings.Secrets.FileUsersSecret)
 	}
 	if settings.Secrets != nil && settings.Secrets.LDAPPassword != nil {
 		ab := childMap(root, "authentication_backend")

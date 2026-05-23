@@ -119,7 +119,7 @@ func TestRenderConfigLDAPBackend(t *testing.T) {
 
 func TestRenderConfigFileBackend(t *testing.T) {
 	s := settings(`{"authentication_backend":{"file":{"search":{"email":true},"path":"/ignored"}}}`)
-	s.FileUsersSecret = &autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"}
+	s.Secrets = &autheliav1alpha1.AutheliaSecrets{FileUsersSecret: &autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"}}
 
 	root := mustRender(t, s, nil, "")
 

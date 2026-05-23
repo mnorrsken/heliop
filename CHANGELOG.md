@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-05-22
+
+### Changed
+- **Breaking:** the Authelia configuration and the Secret references the operator
+  wires into it now live under `spec.settings`. `spec.config` (string),
+  `spec.session` and `spec.authenticationBackend` are removed. The full Authelia
+  config goes verbatim into `spec.settings.additionalConfig` (an object); the
+  operator still injects OIDC clients, generates a default session cookie from
+  `spec.hostname`, sets `authentication_backend.file.path`, and strips the LDAP
+  password.
+- **Breaking:** all file-loaded Secrets are consolidated under
+  `spec.settings.secrets`, each named by the last two Authelia config levels and
+  mapped to its `AUTHELIA_*_FILE` env var: `ldapPassword`, `smtpPassword`,
+  `redisPassword`, `postgresPassword` (each a `{name, key}` reference). Replaces
+  `deployment.postgresSecretName`, `deployment.redisSecretName`,
+  `deployment.smtpPassword` and `settings.ldapPasswordSecret`. The Secret key is
+  now explicit for every entry, and the SMTP password comes from its own Secret
+  rather than the core secret. The file backend users database remains at
+  `spec.settings.fileUsersSecret`.
+
 ## [0.6.0] - 2026-05-22
 
 ### Changed
@@ -116,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows for linting, testing, building the controller image,
   and releasing multi-arch images to GHCR on `v*` tags.
 
+[0.7.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.7.0
 [0.6.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.6.0
 [0.5.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.5.0
 [0.4.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.4.0

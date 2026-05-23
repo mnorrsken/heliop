@@ -49,88 +49,6 @@ spec:
           spec:
             description: spec defines the desired state of Authelia
             properties:
-              authenticationBackend:
-                description: |-
-                  authenticationBackend configures the first factor authentication backend.
-                  When set, the operator renders it into authentication_backend and mounts
-                  the referenced Secrets into the Authelia container. If unset, the backend
-                  is taken from config verbatim.
-                properties:
-                  file:
-                    description: |-
-                      file configures the file-based backend. The users database is sourced from
-                      a Secret and mounted into the Authelia container.
-                    properties:
-                      config:
-                        description: |-
-                          config is merged verbatim into authentication_backend.file (e.g. watch,
-                          search, password). See the Authelia file backend reference.
-                        type: object
-                        x-kubernetes-preserve-unknown-fields: true
-                      usersSecret:
-                        description: |-
-                          usersSecret references the Secret key holding the users database YAML. It
-                          is mounted into the container; the operator sets
-                          authentication_backend.file.path to the mounted path (overriding any path
-                          in config).
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                    required:
-                    - usersSecret
-                    type: object
-                  ldap:
-                    description: |-
-                      ldap configures the LDAP backend. The bind password is sourced from a
-                      Secret, mounted as a file, and referenced via the
-                      AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable.
-                    properties:
-                      config:
-                        description: |-
-                          config is merged verbatim into authentication_backend.ldap (e.g. address,
-                          base_dn, user, implementation, filters, attributes, tls). See the Authelia
-                          LDAP backend reference. Do not set the password here.
-                        type: object
-                        x-kubernetes-preserve-unknown-fields: true
-                      passwordSecret:
-                        description: |-
-                          passwordSecret references the Secret key holding the bind password. It is
-                          mounted as a file and referenced via the
-                          AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable, so
-                          the password is never written into the config.
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                    required:
-                    - passwordSecret
-                    type: object
-                type: object
-                x-kubernetes-validations:
-                - message: exactly one of file or ldap must be set
-                  rule: has(self.file) != has(self.ldap)
-              config:
-                description: |-
-                  config is the Authelia configuration.yaml content. The operator injects
-                  OIDC clients defined via AutheliaOAuthClient resources into
-                  identity_providers.oidc.clients, and merges authenticationBackend (when
-                  set) into authentication_backend, before rendering it into a ConfigMap.
-                type: string
               deployment:
                 description: deployment configures the Authelia Deployment generated
                   by the operator.
@@ -152,18 +70,6 @@ spec:
                     default: IfNotPresent
                     description: imagePullPolicy is the image pull policy for the
                       Authelia container.
-                    type: string
-                  postgresSecretName:
-                    description: |-
-                      postgresSecretName is the Secret mounted at /pg-secret providing the
-                      PostgreSQL password (key: password). When set, the operator mounts it and
-                      sets AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE. Unset by default.
-                    type: string
-                  redisSecretName:
-                    description: |-
-                      redisSecretName is the Secret mounted at /redis-secret providing the
-                      Redis password (key: redis-password). When set, the operator mounts it and
-                      sets AUTHELIA_SESSION_REDIS_PASSWORD_FILE. Unset by default.
                     type: string
                   replicas:
                     default: 2
@@ -231,12 +137,6 @@ spec:
                           More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                         type: object
                     type: object
-                  smtpPassword:
-                    description: |-
-                      smtpPassword, when true, exposes the SMTP password from the core secret
-                      (key SMTP_PASSWORD) to Authelia via AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE.
-                      Disabled by default.
-                    type: boolean
                   volumeClaimTemplate:
                     description: |-
                       volumeClaimTemplate has the operator create and manage a PersistentVolume
@@ -449,17 +349,99 @@ spec:
                   cookie (authelia_url https://<hostname>, cookie domain the parent domain)
                   and as the Traefik IngressRoute host.
                 type: string
-              session:
+              settings:
                 description: |-
-                  session is the Authelia session configuration, merged verbatim into the
-                  "session" config section (see
-                  https://www.authelia.com/configuration/session/introduction/). When no
-                  cookie is configured here or in config, the operator generates a default
-                  one from hostname. The session secret is always supplied via
-                  AUTHELIA_SESSION_SECRET_FILE, and the Redis password via
-                  deployment.redisSecretName.
+                  settings holds the Authelia configuration and the Secret references the
+                  operator wires into it.
+                properties:
+                  additionalConfig:
+                    description: |-
+                      additionalConfig is the Authelia configuration (session,
+                      authentication_backend, access_control, storage, notifier,
+                      identity_providers, etc.) merged verbatim as the base configuration. The
+                      operator layers on top: OIDC clients from AutheliaOAuthClient resources, a
+                      default session cookie derived from hostname when none is set,
+                      authentication_backend.file.path from fileUsersSecret, and removal of any
+                      ldap password (supplied via the environment instead).
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                  fileUsersSecret:
+                    description: |-
+                      fileUsersSecret, when set, mounts the file backend users database Secret
+                      into the container and sets authentication_backend.file.path to the mounted
+                      path.
+                    properties:
+                      key:
+                        description: key is the key within the Secret.
+                        type: string
+                      name:
+                        description: name is the name of the Secret.
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  secrets:
+                    description: |-
+                      secrets references Secrets that Authelia loads from files. Each entry is
+                      mounted and exposed via the matching AUTHELIA_*_FILE environment variable.
+                    properties:
+                      ldapPassword:
+                        description: |-
+                          ldapPassword -> authentication_backend.ldap.password. When set, the
+                          operator also removes any ldap password present in additionalConfig.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      postgresPassword:
+                        description: postgresPassword -> storage.postgres.password.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      redisPassword:
+                        description: redisPassword -> session.redis.password.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                      smtpPassword:
+                        description: smtpPassword -> notifier.smtp.password.
+                        properties:
+                          key:
+                            description: key is the key within the Secret.
+                            type: string
+                          name:
+                            description: name is the name of the Secret.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                    type: object
                 type: object
-                x-kubernetes-preserve-unknown-fields: true
               traefik:
                 description: |-
                   traefik, when set, makes the operator generate a Traefik IngressRoute for
@@ -476,7 +458,7 @@ spec:
                     type: array
                 type: object
             required:
-            - config
+            - settings
             type: object
             x-kubernetes-validations:
             - message: hostname is required when traefik is set

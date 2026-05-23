@@ -11,8 +11,9 @@ custom resources in the `authelia.snosr.se/v1alpha1` API group:
 
 - **`Authelia`** — deploys and configures an Authelia instance. The operator
   renders the configuration into a ConfigMap and reconciles a Deployment and
-  Service. The CR carries the raw Authelia `config` plus first-class fields for
-  the authentication backend, persistent storage, and secrets.
+  Service. The CR carries the Authelia config verbatim under
+  `spec.settings.additionalConfig`, plus the Secret references the operator wires
+  into it.
 - **`AutheliaOAuthClient`** — declares an OIDC client. The operator generates a
   client secret, stores `client_id` / `client_secret` in a
   `<name>-oauth-secret` Secret, and injects the client into the Authelia
@@ -23,13 +24,13 @@ custom resources in the `authelia.snosr.se/v1alpha1` API group:
 - **Generated core secrets** — the session, storage encryption and OIDC secrets
   are generated automatically (and never rotated) unless you supply an existing
   Secret via `deployment.existingSecret`.
-- **First-class authentication backend** — `spec.authenticationBackend.file` or
-  `.ldap`, with the users database / bind password sourced from Secret key
-  references and mounted/wired automatically.
+- **Uniform secret wiring** — `spec.settings.secrets` (ldapPassword,
+  smtpPassword, redisPassword, postgresPassword, …) are mounted and exposed via
+  their `AUTHELIA_*_FILE` env vars; `fileUsersSecret` is mounted and set as
+  `authentication_backend.file.path`. All opt-in, so a minimal (e.g. SQLite, no
+  Redis) instance just works.
 - **OIDC clients as resources** — each `AutheliaOAuthClient` generates its own
   secret; OIDC is only enabled in Authelia when at least one client exists.
-- **Opt-in integrations** — PostgreSQL, Redis and SMTP password mapping are only
-  wired when configured, so a minimal (e.g. SQLite, no Redis) instance just works.
 - **Persistent storage** — `deployment.volumeClaimTemplate` has the operator
   create a retained PVC mounted at `/data` (requires `replicas: 1`); otherwise
   `/data` is an `emptyDir`.
@@ -89,23 +90,21 @@ spec:
       resources:
         requests:
           storage: 1Gi
-  authenticationBackend:
-    file:
-      usersSecret:
-        name: authelia-users
-        key: users_database.yml
-  # session is merged verbatim into the Authelia session config; the cookie is
-  # generated from hostname since none is specified here.
-  session:
-    expiration: 1 hour
-  config: |
-    server:
-      address: 'tcp://0.0.0.0:9091/'
-    storage:
-      local:
-        path: '/data/db.sqlite3'
-    access_control:
-      default_policy: two_factor
+  settings:
+    # Mounted by the operator; sets authentication_backend.file.path.
+    fileUsersSecret:
+      name: authelia-users
+      key: users_database.yml
+    # additionalConfig is verbatim Authelia config. The operator layers on OIDC
+    # clients, the hostname-derived session cookie, and the file.path above.
+    additionalConfig:
+      server:
+        address: tcp://0.0.0.0:9091/
+      storage:
+        local:
+          path: /data/db.sqlite3
+      access_control:
+        default_policy: two_factor
 ```
 
 Add an OIDC client (this also enables the identity provider):

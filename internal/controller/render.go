@@ -21,11 +21,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"sort"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
@@ -101,26 +99,19 @@ func toIfaceSlice(in []string) []any {
 	return out
 }
 
-// renderConfig parses the user-supplied configuration, merges the first factor
-// authentication backend (when set), injects the OIDC clients under
-// identity_providers.oidc.clients, and returns the resulting YAML.
-func renderConfig(base string, clients []oidcClient, backend *autheliav1alpha1.AuthenticationBackendSpec, session *runtime.RawExtension, hostname string) (string, error) {
+// renderConfig builds the Authelia configuration from settings.additionalConfig,
+// wires the backend Secret references, generates a default session cookie from
+// hostname, injects the OIDC clients, and returns the resulting YAML.
+func renderConfig(settings autheliav1alpha1.AutheliaSettings, clients []oidcClient, hostname string) (string, error) {
 	root := map[string]any{}
-	if strings.TrimSpace(base) != "" {
-		if err := yaml.Unmarshal([]byte(base), &root); err != nil {
-			return "", fmt.Errorf("parsing config: %w", err)
+	if raw := settings.AdditionalConfig; raw != nil && len(raw.Raw) > 0 {
+		if err := json.Unmarshal(raw.Raw, &root); err != nil {
+			return "", fmt.Errorf("parsing additionalConfig: %w", err)
 		}
 	}
 
-	if backend != nil {
-		if err := applyAuthenticationBackend(root, backend); err != nil {
-			return "", err
-		}
-	}
-
-	if err := applySession(root, session, hostname); err != nil {
-		return "", err
-	}
+	applyBackendSecrets(root, settings)
+	applySession(root, hostname)
 
 	if len(clients) > 0 {
 		// Sort by client ID so output is deterministic regardless of list order.
@@ -158,60 +149,38 @@ func childMap(parent map[string]any, key string) map[string]any {
 	return child
 }
 
-// applyAuthenticationBackend merges the configured file or ldap backend into
-// authentication_backend, preserving sibling keys (e.g. password_reset) already
-// present in the user config. The LDAP bind password is intentionally omitted;
-// it is supplied at runtime through the *_PASSWORD_FILE environment variable.
-func applyAuthenticationBackend(root map[string]any, backend *autheliav1alpha1.AuthenticationBackendSpec) error {
-	ab := childMap(root, "authentication_backend")
-
-	switch {
-	case backend.File != nil:
-		delete(ab, "ldap")
-		file, err := fileBackendMap(backend.File)
-		if err != nil {
-			return err
-		}
-		ab["file"] = file
-	case backend.LDAP != nil:
-		delete(ab, "file")
-		ldap, err := ldapBackendMap(backend.LDAP)
-		if err != nil {
-			return err
-		}
-		ab["ldap"] = ldap
+// applyBackendSecrets wires the operator-managed backend Secret references into
+// the configuration: it sets authentication_backend.file.path to the mounted
+// users database when fileUsersSecret is set, and strips any
+// authentication_backend.ldap.password (supplied via the environment) when
+// ldapPasswordSecret is set.
+func applyBackendSecrets(root map[string]any, settings autheliav1alpha1.AutheliaSettings) {
+	if settings.FileUsersSecret != nil {
+		ab := childMap(root, "authentication_backend")
+		file := childMap(ab, "file")
+		file["path"] = fileUsersPath(*settings.FileUsersSecret)
 	}
-	return nil
+	if settings.Secrets != nil && settings.Secrets.LDAPPassword != nil {
+		ab := childMap(root, "authentication_backend")
+		ldap := childMap(ab, "ldap")
+		delete(ldap, "password")
+	}
 }
 
-// applySession merges the user-provided session dict (verbatim) into the config
-// session section, then ensures a cookie exists: if none is configured (here or
-// in config) and a hostname is given, a default cookie is generated with
-// authelia_url https://<hostname> and the parent domain of hostname.
-func applySession(root map[string]any, sessionRaw *runtime.RawExtension, hostname string) error {
-	if (sessionRaw == nil || len(sessionRaw.Raw) == 0) && hostname == "" {
-		return nil
+// applySession ensures a session cookie exists: when none is configured and a
+// hostname is given, a default cookie is generated with authelia_url
+// https://<hostname> and the parent domain of hostname.
+func applySession(root map[string]any, hostname string) {
+	if hostname == "" {
+		return
 	}
-
 	session := childMap(root, "session")
-
-	if sessionRaw != nil && len(sessionRaw.Raw) > 0 {
-		var user map[string]any
-		if err := json.Unmarshal(sessionRaw.Raw, &user); err != nil {
-			return fmt.Errorf("decoding session: %w", err)
-		}
-		maps.Copy(session, user)
+	if _, ok := session["cookies"]; !ok {
+		session["cookies"] = []any{map[string]any{
+			"domain":       parentDomain(hostname),
+			"authelia_url": "https://" + hostname,
+		}}
 	}
-
-	if hostname != "" {
-		if _, ok := session["cookies"]; !ok {
-			session["cookies"] = []any{map[string]any{
-				"domain":       parentDomain(hostname),
-				"authelia_url": "https://" + hostname,
-			}}
-		}
-	}
-	return nil
 }
 
 // parentDomain returns the cookie domain for a portal hostname: the hostname
@@ -222,39 +191,4 @@ func parentDomain(hostname string) string {
 		return hostname[i+1:]
 	}
 	return hostname
-}
-
-// fileBackendMap merges the verbatim file config and forces path to the mounted
-// users Secret location (operator-controlled).
-func fileBackendMap(f *autheliav1alpha1.FileAuthenticationBackend) (map[string]any, error) {
-	m := map[string]any{}
-	if err := mergeRaw(m, f.Config); err != nil {
-		return nil, err
-	}
-	m["path"] = fileUsersPath(f.UsersSecret)
-	return m, nil
-}
-
-// ldapBackendMap merges the verbatim ldap config. The bind password is supplied
-// through the *_PASSWORD_FILE environment variable, never the config.
-func ldapBackendMap(l *autheliav1alpha1.LDAPAuthenticationBackend) (map[string]any, error) {
-	m := map[string]any{}
-	if err := mergeRaw(m, l.Config); err != nil {
-		return nil, err
-	}
-	delete(m, "password")
-	return m, nil
-}
-
-// mergeRaw decodes a RawExtension object and copies its keys into dst.
-func mergeRaw(dst map[string]any, raw *runtime.RawExtension) error {
-	if raw == nil || len(raw.Raw) == 0 {
-		return nil
-	}
-	var v map[string]any
-	if err := json.Unmarshal(raw.Raw, &v); err != nil {
-		return fmt.Errorf("decoding config: %w", err)
-	}
-	maps.Copy(dst, v)
-	return nil
 }

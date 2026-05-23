@@ -26,21 +26,37 @@ import (
 	autheliav1alpha1 "github.com/mnorrsken/heliop/api/v1alpha1"
 )
 
+// settings builds an AutheliaSettings whose additionalConfig is the given JSON.
+func settings(additionalConfigJSON string) autheliav1alpha1.AutheliaSettings {
+	s := autheliav1alpha1.AutheliaSettings{}
+	if additionalConfigJSON != "" {
+		s.AdditionalConfig = &runtime.RawExtension{Raw: []byte(additionalConfigJSON)}
+	}
+	return s
+}
+
+func mustRender(t *testing.T, s autheliav1alpha1.AutheliaSettings, clients []oidcClient, hostname string) map[string]any {
+	t.Helper()
+	out, err := renderConfig(s, clients, hostname)
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("output is not valid yaml: %v", err)
+	}
+	return root
+}
+
 func TestRenderConfigInjectsClients(t *testing.T) {
-	base := `log:
-  level: debug
-identity_providers:
-  oidc:
-    cors:
-      allowed_origins_from_client_redirect_uris: true
-`
+	s := settings(`{"log":{"level":"debug"},"identity_providers":{"oidc":{"cors":{"allowed_origins_from_client_redirect_uris":true}}}}`)
 	clients := []oidcClient{
 		{
 			spec: autheliav1alpha1.AutheliaOAuthClientSpec{
 				ClientID:            "argocd",
 				ClientName:          "Argo CD",
 				AuthorizationPolicy: "one_factor",
-				RedirectURIs:        []string{"https://argocd.snosr.se/auth/callback"},
+				RedirectURIs:        []string{"https://argocd.example.com/auth/callback"},
 			},
 			secretDigest: "$pbkdf2-sha512$310000$abc$def",
 		},
@@ -53,18 +69,9 @@ identity_providers:
 		},
 	}
 
-	out, err := renderConfig(base, clients, nil, nil, "")
-	if err != nil {
-		t.Fatalf("renderConfig: %v", err)
-	}
+	root := mustRender(t, s, clients, "")
 
-	var root map[string]any
-	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
-		t.Fatalf("output is not valid yaml: %v", err)
-	}
-
-	idp := root["identity_providers"].(map[string]any)
-	oidc := idp["oidc"].(map[string]any)
+	oidc := root["identity_providers"].(map[string]any)["oidc"].(map[string]any)
 	if oidc["cors"] == nil {
 		t.Error("existing oidc.cors config was dropped")
 	}
@@ -92,57 +99,30 @@ identity_providers:
 }
 
 func TestRenderConfigLDAPBackend(t *testing.T) {
-	base := "authentication_backend:\n  password_reset:\n    disable: true\n  ldap:\n    address: 'ldap://old'\n"
-	backend := &autheliav1alpha1.AuthenticationBackendSpec{
-		LDAP: &autheliav1alpha1.LDAPAuthenticationBackend{
-			PasswordSecret: autheliav1alpha1.SecretKeyRef{Name: "ldap-creds", Key: "password"},
-			Config: &runtime.RawExtension{Raw: []byte(
-				`{"address":"ldap://lldap:3890","base_dn":"DC=example,DC=com","implementation":"lldap","start_tls":true,"password":"leaked"}`)},
-		},
-	}
+	s := settings(`{"authentication_backend":{"password_reset":{"disable":true},"ldap":{"address":"ldap://lldap:3890","base_dn":"DC=example,DC=com","password":"leaked"}}}`)
+	s.Secrets = &autheliav1alpha1.AutheliaSecrets{LDAPPassword: &autheliav1alpha1.SecretKeyRef{Name: "ldap-creds", Key: "password"}}
 
-	out, err := renderConfig(base, nil, backend, nil, "")
-	if err != nil {
-		t.Fatalf("renderConfig: %v", err)
-	}
+	root := mustRender(t, s, nil, "")
 
-	var root map[string]any
-	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
-		t.Fatalf("invalid yaml: %v", err)
-	}
 	ab := root["authentication_backend"].(map[string]any)
 	if ab["password_reset"] == nil {
 		t.Error("sibling password_reset was dropped")
 	}
 	ldap := ab["ldap"].(map[string]any)
 	if ldap["address"] != "ldap://lldap:3890" {
-		t.Errorf("address not overridden: %v", ldap["address"])
-	}
-	if ldap["start_tls"] != true {
-		t.Errorf("start_tls = %v", ldap["start_tls"])
+		t.Errorf("address = %v", ldap["address"])
 	}
 	if _, has := ldap["password"]; has {
-		t.Error("ldap password must not be rendered into config (provided via env)")
+		t.Error("ldap password must be stripped (provided via env)")
 	}
 }
 
 func TestRenderConfigFileBackend(t *testing.T) {
-	backend := &autheliav1alpha1.AuthenticationBackendSpec{
-		File: &autheliav1alpha1.FileAuthenticationBackend{
-			UsersSecret: autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"},
-			Config:      &runtime.RawExtension{Raw: []byte(`{"search":{"email":true},"path":"/ignored"}`)},
-		},
-	}
+	s := settings(`{"authentication_backend":{"file":{"search":{"email":true},"path":"/ignored"}}}`)
+	s.FileUsersSecret = &autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"}
 
-	out, err := renderConfig("", nil, backend, nil, "")
-	if err != nil {
-		t.Fatalf("renderConfig: %v", err)
-	}
+	root := mustRender(t, s, nil, "")
 
-	var root map[string]any
-	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
-		t.Fatalf("invalid yaml: %v", err)
-	}
 	file := root["authentication_backend"].(map[string]any)["file"].(map[string]any)
 	want := fileBackendMountPath + "/users_database.yml"
 	if file["path"] != want {
@@ -153,28 +133,20 @@ func TestRenderConfigFileBackend(t *testing.T) {
 	}
 }
 
-func TestRenderConfigSessionRawMergeAndDefaultCookie(t *testing.T) {
-	// A verbatim session dict (with redis); cookie generated from hostname.
-	session := &runtime.RawExtension{Raw: []byte(`{"expiration":"2 hours","redis":{"host":"redis","database_index":2}}`)}
+func TestRenderConfigSessionDefaultCookie(t *testing.T) {
+	s := settings(`{"session":{"expiration":"2 hours","redis":{"host":"redis","database_index":2}}}`)
 
-	out, err := renderConfig("", nil, nil, session, "sso.example.com")
-	if err != nil {
-		t.Fatalf("renderConfig: %v", err)
-	}
+	root := mustRender(t, s, nil, "sso.example.com")
 
-	var root map[string]any
-	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
-		t.Fatalf("invalid yaml: %v", err)
+	sess := root["session"].(map[string]any)
+	if sess["expiration"] != "2 hours" {
+		t.Errorf("expiration = %v", sess["expiration"])
 	}
-	s := root["session"].(map[string]any)
-	if s["expiration"] != "2 hours" {
-		t.Errorf("expiration = %v", s["expiration"])
-	}
-	redis := s["redis"].(map[string]any)
+	redis := sess["redis"].(map[string]any)
 	if redis["host"] != "redis" || redis["database_index"] != float64(2) {
 		t.Errorf("redis not passed through verbatim: %#v", redis)
 	}
-	cookie := s["cookies"].([]any)[0].(map[string]any)
+	cookie := sess["cookies"].([]any)[0].(map[string]any)
 	if cookie["domain"] != "example.com" {
 		t.Errorf("domain = %v (want parent domain of hostname)", cookie["domain"])
 	}
@@ -183,16 +155,9 @@ func TestRenderConfigSessionRawMergeAndDefaultCookie(t *testing.T) {
 	}
 }
 
-func TestRenderConfigSessionDefaultCookieWithoutSpec(t *testing.T) {
-	// No session spec at all, just a hostname -> default cookie still generated.
-	out, err := renderConfig("", nil, nil, nil, "auth.example.com")
-	if err != nil {
-		t.Fatalf("renderConfig: %v", err)
-	}
-	var root map[string]any
-	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
-		t.Fatalf("invalid yaml: %v", err)
-	}
+func TestRenderConfigSessionDefaultCookieWithoutConfig(t *testing.T) {
+	// No additionalConfig at all, just a hostname -> default cookie generated.
+	root := mustRender(t, autheliav1alpha1.AutheliaSettings{}, nil, "auth.example.com")
 	cookie := root["session"].(map[string]any)["cookies"].([]any)[0].(map[string]any)
 	if cookie["domain"] != "example.com" || cookie["authelia_url"] != "https://auth.example.com" {
 		t.Errorf("unexpected default cookie: %#v", cookie)
@@ -200,24 +165,16 @@ func TestRenderConfigSessionDefaultCookieWithoutSpec(t *testing.T) {
 }
 
 func TestRenderConfigSessionExplicitCookiesNotOverridden(t *testing.T) {
-	// User-provided cookies win over the hostname-derived default.
-	session := &runtime.RawExtension{Raw: []byte(`{"cookies":[{"domain":"corp.internal","authelia_url":"https://login.corp.internal"}]}`)}
-	out, err := renderConfig("", nil, nil, session, "sso.example.com")
-	if err != nil {
-		t.Fatalf("renderConfig: %v", err)
-	}
-	var root map[string]any
-	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
-		t.Fatalf("invalid yaml: %v", err)
-	}
+	s := settings(`{"session":{"cookies":[{"domain":"corp.internal","authelia_url":"https://login.corp.internal"}]}}`)
+	root := mustRender(t, s, nil, "sso.example.com")
 	cookies := root["session"].(map[string]any)["cookies"].([]any)
 	if len(cookies) != 1 || cookies[0].(map[string]any)["domain"] != "corp.internal" {
 		t.Errorf("explicit cookies were overridden: %#v", cookies)
 	}
 }
 
-func TestRenderConfigEmptyBase(t *testing.T) {
-	out, err := renderConfig("", nil, nil, nil, "")
+func TestRenderConfigEmpty(t *testing.T) {
+	out, err := renderConfig(autheliav1alpha1.AutheliaSettings{}, nil, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}

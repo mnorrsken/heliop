@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -52,7 +53,9 @@ var _ = Describe("Authelia Controller", func() {
 						Namespace: "default",
 					},
 					Spec: autheliav1alpha1.AutheliaSpec{
-						Config: "log:\n  level: debug\n",
+						Settings: autheliav1alpha1.AutheliaSettings{
+							AdditionalConfig: &runtime.RawExtension{Raw: []byte(`{"log":{"level":"debug"}}`)},
+						},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

@@ -21,75 +21,72 @@ spec:
     # generated into "<name>-secrets" when existingSecret is omitted. Set it to
     # bring your own Secret containing those keys instead:
     # existingSecret: authelia
-    # Postgres, Redis and SMTP password mapping are opt-in. Omit these to run
-    # with e.g. sqlite storage, no Redis session store, and no SMTP password.
-    postgresSecretName: authelia-db-app
-    redisSecretName: redis-ha
-    smtpPassword: true
-  # First factor backend. config is merged verbatim into authentication_backend;
-  # the operator only handles the referenced Secret(s): the LDAP bind password is
-  # mounted and exposed via AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE.
-  authenticationBackend:
-    ldap:
-      passwordSecret:
+  # settings holds the verbatim Authelia config plus the Secret references the
+  # operator wires into it.
+  settings:
+    # secrets are mounted by the operator and exposed via the matching
+    # AUTHELIA_*_FILE env var; each is named by the last two Authelia config
+    # levels. All optional. https://www.authelia.com/configuration/methods/secrets/
+    secrets:
+      ldapPassword: # authentication_backend.ldap.password
         name: authelia-ldap
         key: password
-      config:
-        implementation: lldap
-        address: ldap://lldap:3890
-        base_dn: DC=example,DC=com
-        user: UID=read,OU=people,DC=example,DC=com
-    # Alternatively, a file backend (mutually exclusive with ldap). usersSecret is
-    # mounted and set as file.path; config is merged verbatim:
-    # file:
-    #   usersSecret:
-    #     name: authelia-users
-    #     key: users_database.yml
-    #   config:
-    #     search:
-    #       email: true
-    #       case_insensitive: true
-  # session is merged verbatim into the Authelia "session" config. A default
-  # cookie is generated from hostname (authelia_url https://sso.example.com,
-  # domain example.com) when no cookies are specified here. The session secret
-  # comes from AUTHELIA_SESSION_SECRET_FILE; the Redis password from
-  # deployment.redisSecretName.
-  session:
-    expiration: 1 hour
-    redis:
-      host: redis
-      port: 6379
-  # OIDC clients are injected under identity_providers.oidc.clients from
-  # AutheliaOAuthClient resources targeting this Authelia.
-  config: |
-    default_2fa_method: 'totp'
-    log:
-      level: debug
-    server:
-      address: 'tcp://0.0.0.0:9091/'
-    totp:
-      issuer: 'example.com'
-    storage:
-      postgres:
-        address: 'tcp://authelia-db-rw:5432'
-        database: 'app'
-        username: 'app'
-    notifier:
-      smtp:
-        address: 'smtp.example.com:587'
-        username: 'admin@example.com'
-        sender: 'admin@example.com'
-    access_control:
-      default_policy: deny
-      rules:
-        - domain: 'sso.example.com'
-          policy: bypass
-        - domain: '*.example.com'
-          policy: two_factor
-    identity_providers:
-      oidc:
-        claims_policies:
-          default:
-            id_token: ['groups', 'email', 'preferred_username', 'name']
-        cors:
-          allowed_origins_from_client_redirect_uris: true
+      postgresPassword: # storage.postgres.password
+        name: authelia-db-app
+        key: password
+      redisPassword: # session.redis.password
+        name: redis-ha
+        key: redis-password
+      smtpPassword: # notifier.smtp.password
+        name: authelia-smtp
+        key: password
+    # fileUsersSecret (file backend) is mounted and set as file.path:
+    # fileUsersSecret:
+    #   name: authelia-users
+    #   key: users_database.yml
+    # additionalConfig is the Authelia configuration, verbatim. The operator
+    # layers on: OIDC clients (from AutheliaOAuthClient), a default session cookie
+    # from hostname when none is set, ldap password stripping, and file.path.
+    additionalConfig:
+      default_2fa_method: totp
+      log:
+        level: debug
+      server:
+        address: tcp://0.0.0.0:9091/
+      totp:
+        issuer: example.com
+      authentication_backend:
+        ldap:
+          implementation: lldap
+          address: ldap://lldap:3890
+          base_dn: DC=example,DC=com
+          user: UID=read,OU=people,DC=example,DC=com
+      session:
+        expiration: 1 hour
+        redis:
+          host: redis
+          port: 6379
+      storage:
+        postgres:
+          address: tcp://authelia-db-rw:5432
+          database: app
+          username: app
+      notifier:
+        smtp:
+          address: smtp.example.com:587
+          username: admin@example.com
+          sender: admin@example.com
+      access_control:
+        default_policy: deny
+        rules:
+          - domain: sso.example.com
+            policy: bypass
+          - domain: '*.example.com'
+            policy: two_factor
+      identity_providers:
+        oidc:
+          claims_policies:
+            default:
+              id_token: [groups, email, preferred_username, name]
+          cors:
+            allowed_origins_from_client_redirect_uris: true

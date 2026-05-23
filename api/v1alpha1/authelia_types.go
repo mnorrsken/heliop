@@ -36,23 +36,6 @@ type AutheliaSpec struct {
 	// +optional
 	Deployment AutheliaDeploymentSpec `json:"deployment,omitempty"`
 
-	// authenticationBackend configures the first factor authentication backend.
-	// When set, the operator renders it into authentication_backend and mounts
-	// the referenced Secrets into the Authelia container. If unset, the backend
-	// is taken from config verbatim.
-	// +optional
-	AuthenticationBackend *AuthenticationBackendSpec `json:"authenticationBackend,omitempty"`
-
-	// session is the Authelia session configuration, merged verbatim into the
-	// "session" config section (see
-	// https://www.authelia.com/configuration/session/introduction/). When no
-	// cookie is configured here or in config, the operator generates a default
-	// one from hostname. The session secret is always supplied via
-	// AUTHELIA_SESSION_SECRET_FILE, and the Redis password via
-	// deployment.redisSecretName.
-	// +optional
-	Session *runtime.RawExtension `json:"session,omitempty"`
-
 	// traefik, when set, makes the operator generate a Traefik IngressRoute for
 	// the portal (at hostname) and a forwardAuth Middleware named
 	// "<name>-forwardauth" that other IngressRoutes can reference to require
@@ -60,12 +43,10 @@ type AutheliaSpec struct {
 	// +optional
 	Traefik *TraefikSpec `json:"traefik,omitempty"`
 
-	// config is the Authelia configuration.yaml content. The operator injects
-	// OIDC clients defined via AutheliaOAuthClient resources into
-	// identity_providers.oidc.clients, and merges authenticationBackend (when
-	// set) into authentication_backend, before rendering it into a ConfigMap.
+	// settings holds the Authelia configuration and the Secret references the
+	// operator wires into it.
 	// +required
-	Config string `json:"config"`
+	Settings AutheliaSettings `json:"settings"`
 }
 
 // SecretKeyRef references a single key within a Secret in the Authelia's
@@ -80,53 +61,52 @@ type SecretKeyRef struct {
 	Key string `json:"key"`
 }
 
-// AuthenticationBackendSpec configures Authelia's first factor backend. Exactly
-// one of file or ldap must be set.
-// +kubebuilder:validation:XValidation:rule="has(self.file) != has(self.ldap)",message="exactly one of file or ldap must be set"
-type AuthenticationBackendSpec struct {
-	// file configures the file-based backend. The users database is sourced from
-	// a Secret and mounted into the Authelia container.
+// AutheliaSettings holds the Authelia configuration (as a verbatim object) plus
+// the Secret references the operator mounts and wires into that configuration.
+type AutheliaSettings struct {
+	// additionalConfig is the Authelia configuration (session,
+	// authentication_backend, access_control, storage, notifier,
+	// identity_providers, etc.) merged verbatim as the base configuration. The
+	// operator layers on top: OIDC clients from AutheliaOAuthClient resources, a
+	// default session cookie derived from hostname when none is set,
+	// authentication_backend.file.path from fileUsersSecret, and removal of any
+	// ldap password (supplied via the environment instead).
 	// +optional
-	File *FileAuthenticationBackend `json:"file,omitempty"`
+	AdditionalConfig *runtime.RawExtension `json:"additionalConfig,omitempty"`
 
-	// ldap configures the LDAP backend. The bind password is sourced from a
-	// Secret, mounted as a file, and referenced via the
-	// AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable.
+	// fileUsersSecret, when set, mounts the file backend users database Secret
+	// into the container and sets authentication_backend.file.path to the mounted
+	// path.
 	// +optional
-	LDAP *LDAPAuthenticationBackend `json:"ldap,omitempty"`
+	FileUsersSecret *SecretKeyRef `json:"fileUsersSecret,omitempty"`
+
+	// secrets references Secrets that Authelia loads from files. Each entry is
+	// mounted and exposed via the matching AUTHELIA_*_FILE environment variable.
+	// +optional
+	Secrets *AutheliaSecrets `json:"secrets,omitempty"`
 }
 
-// FileAuthenticationBackend configures the file-based first factor backend.
-// https://www.authelia.com/configuration/first-factor/file/
-type FileAuthenticationBackend struct {
-	// usersSecret references the Secret key holding the users database YAML. It
-	// is mounted into the container; the operator sets
-	// authentication_backend.file.path to the mounted path (overriding any path
-	// in config).
-	// +required
-	UsersSecret SecretKeyRef `json:"usersSecret"`
-
-	// config is merged verbatim into authentication_backend.file (e.g. watch,
-	// search, password). See the Authelia file backend reference.
+// AutheliaSecrets references the Secrets that Authelia loads from files. Each
+// field is named by the last two levels of the corresponding configuration key
+// and maps to its AUTHELIA_*_FILE environment variable. See
+// https://www.authelia.com/configuration/methods/secrets/
+type AutheliaSecrets struct {
+	// ldapPassword -> authentication_backend.ldap.password. When set, the
+	// operator also removes any ldap password present in additionalConfig.
 	// +optional
-	Config *runtime.RawExtension `json:"config,omitempty"`
-}
+	LDAPPassword *SecretKeyRef `json:"ldapPassword,omitempty"`
 
-// LDAPAuthenticationBackend configures the LDAP first factor backend.
-// https://www.authelia.com/configuration/first-factor/ldap/
-type LDAPAuthenticationBackend struct {
-	// passwordSecret references the Secret key holding the bind password. It is
-	// mounted as a file and referenced via the
-	// AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE environment variable, so
-	// the password is never written into the config.
-	// +required
-	PasswordSecret SecretKeyRef `json:"passwordSecret"`
-
-	// config is merged verbatim into authentication_backend.ldap (e.g. address,
-	// base_dn, user, implementation, filters, attributes, tls). See the Authelia
-	// LDAP backend reference. Do not set the password here.
+	// smtpPassword -> notifier.smtp.password.
 	// +optional
-	Config *runtime.RawExtension `json:"config,omitempty"`
+	SMTPPassword *SecretKeyRef `json:"smtpPassword,omitempty"`
+
+	// redisPassword -> session.redis.password.
+	// +optional
+	RedisPassword *SecretKeyRef `json:"redisPassword,omitempty"`
+
+	// postgresPassword -> storage.postgres.password.
+	// +optional
+	PostgresPassword *SecretKeyRef `json:"postgresPassword,omitempty"`
 }
 
 // TraefikSpec configures generation of Traefik resources for Authelia.
@@ -169,24 +149,6 @@ type AutheliaDeploymentSpec struct {
 	// preserved across reconciles).
 	// +optional
 	ExistingSecret string `json:"existingSecret,omitempty"`
-
-	// postgresSecretName is the Secret mounted at /pg-secret providing the
-	// PostgreSQL password (key: password). When set, the operator mounts it and
-	// sets AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE. Unset by default.
-	// +optional
-	PostgresSecretName string `json:"postgresSecretName,omitempty"`
-
-	// redisSecretName is the Secret mounted at /redis-secret providing the
-	// Redis password (key: redis-password). When set, the operator mounts it and
-	// sets AUTHELIA_SESSION_REDIS_PASSWORD_FILE. Unset by default.
-	// +optional
-	RedisSecretName string `json:"redisSecretName,omitempty"`
-
-	// smtpPassword, when true, exposes the SMTP password from the core secret
-	// (key SMTP_PASSWORD) to Authelia via AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE.
-	// Disabled by default.
-	// +optional
-	SMTPPassword *bool `json:"smtpPassword,omitempty"`
 
 	// volumeClaimTemplate has the operator create and manage a PersistentVolume
 	// Claim named "<name>-data" mounted at /data, for persistent state such as a

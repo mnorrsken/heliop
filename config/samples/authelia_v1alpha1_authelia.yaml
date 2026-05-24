@@ -24,29 +24,33 @@ spec:
   # settings holds the verbatim Authelia config plus the Secret references the
   # operator wires into it.
   settings:
-    # secrets are mounted by the operator and exposed via the matching
-    # AUTHELIA_*_FILE env var; each is named by the last two Authelia config
-    # levels. All optional. https://www.authelia.com/configuration/methods/secrets/
+    # secrets maps Authelia env variables to Secret values. _FILE variables are
+    # mounted and the variable is set to the file path; others are set directly.
+    # https://www.authelia.com/configuration/methods/secrets/
     secrets:
-      ldapPassword: # authentication_backend.ldap.password
-        name: authelia-ldap
-        key: password
-      postgresPassword: # storage.postgres.password
-        name: authelia-db-app
-        key: password
-      redisPassword: # session.redis.password
-        name: redis-ha
-        key: redis-password
-      smtpPassword: # notifier.smtp.password
-        name: authelia-smtp
-        key: password
+      - name: AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE
+        secret:
+          name: authelia-ldap
+          key: password
+      - name: AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE
+        secret:
+          name: authelia-db-app
+          key: password
+      - name: AUTHELIA_SESSION_REDIS_PASSWORD_FILE
+        secret:
+          name: redis-ha
+          key: redis-password
+      - name: AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE
+        secret:
+          name: authelia-smtp
+          key: password
     # fileUsersSecret (file backend) is mounted and set as file.path:
     # fileUsersSecret:
     #   name: authelia-users
     #   key: users_database.yml
     # additionalConfig is the Authelia configuration, verbatim. The operator
     # layers on: OIDC clients (from AutheliaOAuthClient), a default session cookie
-    # from hostname when none is set, ldap password stripping, and file.path.
+    # from hostname when none is set, and file.path.
     additionalConfig:
       default_2fa_method: totp
       log:

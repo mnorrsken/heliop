@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -54,35 +56,29 @@ func fileUsersPath(ref autheliav1alpha1.SecretKeyRef) string {
 	return fileBackendMountPath + "/" + ref.Key
 }
 
-// managedSecret is a Secret that Authelia loads from a file, exposed via an
-// AUTHELIA_*_FILE environment variable.
-type managedSecret struct {
-	name   string // volume name and mount sub-directory
-	envVar string
-	ref    *autheliav1alpha1.SecretKeyRef
-}
+// isFileSecret reports whether the env variable expects a file path (the
+// Authelia *_FILE convention), in which case the Secret is mounted.
+func isFileSecret(envName string) bool { return strings.HasSuffix(envName, "_FILE") }
 
-func (m managedSecret) mountPath() string { return secretsMountBase + "/" + m.name }
-func (m managedSecret) filePath() string  { return m.mountPath() + "/" + m.ref.Key }
-
-// managedSecrets returns the configured file-loaded Secrets in a stable order.
-func managedSecrets(s autheliav1alpha1.AutheliaSettings) []managedSecret {
-	if s.Secrets == nil {
-		return nil
-	}
-	all := []managedSecret{
-		{"ldap-password", "AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE", s.Secrets.LDAPPassword},
-		{"smtp-password", "AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE", s.Secrets.SMTPPassword},
-		{"redis-password", "AUTHELIA_SESSION_REDIS_PASSWORD_FILE", s.Secrets.RedisPassword},
-		{"postgres-password", "AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE", s.Secrets.PostgresPassword},
-	}
-	out := make([]managedSecret, 0, len(all))
-	for _, m := range all {
-		if m.ref != nil {
-			out = append(out, m)
+// secretVolumeName derives a DNS-1123 volume name from an env variable name.
+func secretVolumeName(envName string) string {
+	b := make([]rune, 0, len(envName))
+	for _, r := range strings.ToLower(envName) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b = append(b, r)
+		} else {
+			b = append(b, '-')
 		}
 	}
-	return out
+	name := strings.Trim(string(b), "-")
+	if len(name) > 63 {
+		name = strings.Trim(name[:63], "-")
+	}
+	return name
+}
+
+func secretMountPath(envName string) string {
+	return secretsMountBase + "/" + secretVolumeName(envName)
 }
 
 func labelsFor(a *autheliav1alpha1.Authelia) map[string]string {
@@ -169,9 +165,6 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool, configCheck
 	settings := a.Spec.Settings
 
 	podLabels := selectorFor(a)
-	if settings.Secrets != nil && settings.Secrets.RedisPassword != nil {
-		podLabels["redis-ha-client"] = "true"
-	}
 
 	probe := func(initialDelay, period int32) *corev1.Probe {
 		return &corev1.Probe{
@@ -211,15 +204,19 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool, configCheck
 	}
 
 	// Mount the file backend users database when configured.
-	if settings.Secrets != nil && settings.Secrets.FileUsersSecret != nil {
-		volumes = append(volumes, corev1.Volume{Name: "file-backend", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: settings.Secrets.FileUsersSecret.Name}}})
+	if settings.FileUsersSecret != nil {
+		volumes = append(volumes, corev1.Volume{Name: "file-backend", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: settings.FileUsersSecret.Name}}})
 		mainMounts = append(mainMounts, corev1.VolumeMount{Name: "file-backend", MountPath: fileBackendMountPath, ReadOnly: true})
 	}
 
-	// Mount each file-loaded Secret (postgres/redis/smtp/ldap passwords, ...).
-	for _, m := range managedSecrets(settings) {
-		volumes = append(volumes, corev1.Volume{Name: m.name, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: m.ref.Name}}})
-		mainMounts = append(mainMounts, corev1.VolumeMount{Name: m.name, MountPath: m.mountPath(), ReadOnly: true})
+	// Mount each _FILE secret so Authelia can read it from the mounted path.
+	for _, s := range settings.Secrets {
+		if s.Secret == nil || !isFileSecret(s.Name) {
+			continue
+		}
+		name := secretVolumeName(s.Name)
+		volumes = append(volumes, corev1.Volume{Name: name, VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: s.Secret.Name}}})
+		mainMounts = append(mainMounts, corev1.VolumeMount{Name: name, MountPath: secretMountPath(s.Name), ReadOnly: true})
 	}
 
 	return &appsv1.Deployment{
@@ -264,11 +261,12 @@ func buildDeployment(a *autheliav1alpha1.Authelia, oidcEnabled bool, configCheck
 	}
 }
 
-// autheliaFileEnv lists the secret-file env references used by Authelia. The
-// core secrets (session, storage encryption key) are always referenced; the
-// OIDC secrets only when clients are configured (they implicitly enable the
-// identity provider, which then requires a client). Each configured
-// settings.secrets entry adds its matching AUTHELIA_*_FILE reference.
+// autheliaFileEnv lists the env references used by Authelia. The core secrets
+// (session, storage encryption key) are always referenced; the OIDC secrets
+// only when clients are configured (they implicitly enable the identity
+// provider, which then requires a client). Each settings.secrets entry adds its
+// variable: a file path for _FILE variables (the Secret is mounted), or the
+// Secret value directly otherwise.
 func autheliaFileEnv(settings autheliav1alpha1.AutheliaSettings, oidcEnabled bool) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "AUTHELIA_SERVER_DISABLE_HEALTHCHECK", Value: "true"},
@@ -283,8 +281,20 @@ func autheliaFileEnv(settings autheliav1alpha1.AutheliaSettings, oidcEnabled boo
 		)
 	}
 
-	for _, m := range managedSecrets(settings) {
-		env = append(env, corev1.EnvVar{Name: m.envVar, Value: m.filePath()})
+	for _, s := range settings.Secrets {
+		if s.Secret == nil {
+			continue
+		}
+		if isFileSecret(s.Name) {
+			env = append(env, corev1.EnvVar{Name: s.Name, Value: secretMountPath(s.Name) + "/" + s.Secret.Key})
+		} else {
+			env = append(env, corev1.EnvVar{Name: s.Name, ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: s.Secret.Name},
+					Key:                  s.Secret.Key,
+				},
+			}})
+		}
 	}
 	return env
 }

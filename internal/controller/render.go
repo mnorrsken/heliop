@@ -110,7 +110,7 @@ func renderConfig(settings autheliav1alpha1.AutheliaSettings, clients []oidcClie
 		}
 	}
 
-	applyBackendSecrets(root, settings)
+	applyFileBackend(root, settings)
 	applySession(root, hostname)
 
 	if len(clients) > 0 {
@@ -149,22 +149,14 @@ func childMap(parent map[string]any, key string) map[string]any {
 	return child
 }
 
-// applyBackendSecrets wires the operator-managed backend Secret references into
-// the configuration: it sets authentication_backend.file.path to the mounted
-// users database when fileUsersSecret is set, and strips any
-// authentication_backend.ldap.password (supplied via the environment) when
-// ldapPasswordSecret is set.
-func applyBackendSecrets(root map[string]any, settings autheliav1alpha1.AutheliaSettings) {
-	if settings.Secrets != nil && settings.Secrets.FileUsersSecret != nil {
-		ab := childMap(root, "authentication_backend")
-		file := childMap(ab, "file")
-		file["path"] = fileUsersPath(*settings.Secrets.FileUsersSecret)
+// applyFileBackend sets authentication_backend.file.path to the mounted users
+// database when fileUsersSecret is configured.
+func applyFileBackend(root map[string]any, settings autheliav1alpha1.AutheliaSettings) {
+	if settings.FileUsersSecret == nil {
+		return
 	}
-	if settings.Secrets != nil && settings.Secrets.LDAPPassword != nil {
-		ab := childMap(root, "authentication_backend")
-		ldap := childMap(ab, "ldap")
-		delete(ldap, "password")
-	}
+	file := childMap(childMap(root, "authentication_backend"), "file")
+	file["path"] = fileUsersPath(*settings.FileUsersSecret)
 }
 
 // applySession ensures a session cookie exists: when none is configured and a

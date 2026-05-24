@@ -24,9 +24,10 @@ custom resources in the `authelia.snosr.se/v1alpha1` API group:
 - **Generated core secrets** — the session, storage encryption and OIDC secrets
   are generated automatically (and never rotated) unless you supply an existing
   Secret via `deployment.existingSecret`.
-- **Uniform secret wiring** — `spec.settings.secrets` (ldapPassword,
-  smtpPassword, redisPassword, postgresPassword, …) are mounted and exposed via
-  their `AUTHELIA_*_FILE` env vars; `fileUsersSecret` is mounted and set as
+- **Uniform secret wiring** — `spec.settings.secrets` is a list of
+  `{name, secret}` mapping any Authelia env variable to a Secret value: `_FILE`
+  variables are mounted and set to the file path, others are set directly via
+  `valueFrom`. `fileUsersSecret` is mounted and set as
   `authentication_backend.file.path`. All opt-in, so a minimal (e.g. SQLite, no
   Redis) instance just works.
 - **OIDC clients as resources** — each `AutheliaOAuthClient` generates its own

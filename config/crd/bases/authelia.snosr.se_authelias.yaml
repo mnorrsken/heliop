@@ -365,82 +365,60 @@ spec:
                       ldap password (supplied via the environment instead).
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
+                  fileUsersSecret:
+                    description: |-
+                      fileUsersSecret, when set, mounts the file backend users database Secret
+                      into the container and sets authentication_backend.file.path to the mounted
+                      path.
+                    properties:
+                      key:
+                        description: key is the key within the Secret.
+                        type: string
+                      name:
+                        description: name is the name of the Secret.
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
                   secrets:
                     description: |-
-                      secrets references Secrets that Authelia loads from files. Each entry is
-                      mounted and exposed via the matching AUTHELIA_*_FILE environment variable.
-                    properties:
-                      fileUsersSecret:
-                        description: |-
-                          fileUsersSecret, when set, mounts the file backend users database Secret
-                          into the container and sets authentication_backend.file.path to the mounted
-                          path.
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                      ldapPassword:
-                        description: |-
-                          ldapPassword -> authentication_backend.ldap.password. When set, the
-                          operator also removes any ldap password present in additionalConfig.
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                      postgresPassword:
-                        description: postgresPassword -> storage.postgres.password.
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                      redisPassword:
-                        description: redisPassword -> session.redis.password.
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                      smtpPassword:
-                        description: smtpPassword -> notifier.smtp.password.
-                        properties:
-                          key:
-                            description: key is the key within the Secret.
-                            type: string
-                          name:
-                            description: name is the name of the Secret.
-                            type: string
-                        required:
-                        - key
-                        - name
-                        type: object
-                    type: object
+                      secrets maps Authelia environment variables to Secret values. See
+                      https://www.authelia.com/configuration/methods/secrets/
+                    items:
+                      description: AutheliaSecret maps an Authelia environment variable
+                        to a Secret value.
+                      properties:
+                        name:
+                          description: |-
+                            name is the Authelia environment variable, e.g.
+                            AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE or AUTHELIA_SESSION_REDIS_PASSWORD.
+                            When it ends with "_FILE" the Secret is mounted as a file and the variable
+                            is set to that file's path; otherwise the variable value is taken directly
+                            from the Secret.
+                          type: string
+                        secret:
+                          description: secret references the Secret key providing
+                            the value.
+                          properties:
+                            key:
+                              description: key is the key within the Secret.
+                              type: string
+                            name:
+                              description: name is the name of the Secret.
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                      required:
+                      - name
+                      - secret
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                 type: object
               traefik:
                 description: |-

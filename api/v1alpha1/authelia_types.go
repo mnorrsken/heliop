@@ -74,39 +74,33 @@ type AutheliaSettings struct {
 	// +optional
 	AdditionalConfig *runtime.RawExtension `json:"additionalConfig,omitempty"`
 
-	// secrets references Secrets that Authelia loads from files. Each entry is
-	// mounted and exposed via the matching AUTHELIA_*_FILE environment variable.
-	// +optional
-	Secrets *AutheliaSecrets `json:"secrets,omitempty"`
-}
-
-// AutheliaSecrets references the Secrets that Authelia loads from files. Each
-// field is named by the last two levels of the corresponding configuration key
-// and maps to its AUTHELIA_*_FILE environment variable. See
-// https://www.authelia.com/configuration/methods/secrets/
-type AutheliaSecrets struct {
-	// ldapPassword -> authentication_backend.ldap.password. When set, the
-	// operator also removes any ldap password present in additionalConfig.
-	// +optional
-	LDAPPassword *SecretKeyRef `json:"ldapPassword,omitempty"`
-
-	// smtpPassword -> notifier.smtp.password.
-	// +optional
-	SMTPPassword *SecretKeyRef `json:"smtpPassword,omitempty"`
-
-	// redisPassword -> session.redis.password.
-	// +optional
-	RedisPassword *SecretKeyRef `json:"redisPassword,omitempty"`
-
-	// postgresPassword -> storage.postgres.password.
-	// +optional
-	PostgresPassword *SecretKeyRef `json:"postgresPassword,omitempty"`
-
 	// fileUsersSecret, when set, mounts the file backend users database Secret
 	// into the container and sets authentication_backend.file.path to the mounted
 	// path.
 	// +optional
 	FileUsersSecret *SecretKeyRef `json:"fileUsersSecret,omitempty"`
+
+	// secrets maps Authelia environment variables to Secret values. See
+	// https://www.authelia.com/configuration/methods/secrets/
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Secrets []AutheliaSecret `json:"secrets,omitempty"`
+}
+
+// AutheliaSecret maps an Authelia environment variable to a Secret value.
+type AutheliaSecret struct {
+	// name is the Authelia environment variable, e.g.
+	// AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE or AUTHELIA_SESSION_REDIS_PASSWORD.
+	// When it ends with "_FILE" the Secret is mounted as a file and the variable
+	// is set to that file's path; otherwise the variable value is taken directly
+	// from the Secret.
+	// +required
+	Name string `json:"name"`
+
+	// secret references the Secret key providing the value.
+	// +required
+	Secret *SecretKeyRef `json:"secret"`
 }
 
 // TraefikSpec configures generation of Traefik resources for Authelia.

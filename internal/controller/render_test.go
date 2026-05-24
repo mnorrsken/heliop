@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 
@@ -98,28 +99,9 @@ func TestRenderConfigInjectsClients(t *testing.T) {
 	}
 }
 
-func TestRenderConfigLDAPBackend(t *testing.T) {
-	s := settings(`{"authentication_backend":{"password_reset":{"disable":true},"ldap":{"address":"ldap://lldap:3890","base_dn":"DC=example,DC=com","password":"leaked"}}}`)
-	s.Secrets = &autheliav1alpha1.AutheliaSecrets{LDAPPassword: &autheliav1alpha1.SecretKeyRef{Name: "ldap-creds", Key: "password"}}
-
-	root := mustRender(t, s, nil, "")
-
-	ab := root["authentication_backend"].(map[string]any)
-	if ab["password_reset"] == nil {
-		t.Error("sibling password_reset was dropped")
-	}
-	ldap := ab["ldap"].(map[string]any)
-	if ldap["address"] != "ldap://lldap:3890" {
-		t.Errorf("address = %v", ldap["address"])
-	}
-	if _, has := ldap["password"]; has {
-		t.Error("ldap password must be stripped (provided via env)")
-	}
-}
-
 func TestRenderConfigFileBackend(t *testing.T) {
 	s := settings(`{"authentication_backend":{"file":{"search":{"email":true},"path":"/ignored"}}}`)
-	s.Secrets = &autheliav1alpha1.AutheliaSecrets{FileUsersSecret: &autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"}}
+	s.FileUsersSecret = &autheliav1alpha1.SecretKeyRef{Name: "users", Key: "users_database.yml"}
 
 	root := mustRender(t, s, nil, "")
 
@@ -130,6 +112,34 @@ func TestRenderConfigFileBackend(t *testing.T) {
 	}
 	if file["search"].(map[string]any)["email"] != true {
 		t.Errorf("verbatim search config dropped: %#v", file["search"])
+	}
+}
+
+func TestAutheliaFileEnvSecrets(t *testing.T) {
+	s := autheliav1alpha1.AutheliaSettings{
+		Secrets: []autheliav1alpha1.AutheliaSecret{
+			{Name: "AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE", Secret: &autheliav1alpha1.SecretKeyRef{Name: "smtp", Key: "password"}},
+			{Name: "AUTHELIA_SESSION_REDIS_PASSWORD", Secret: &autheliav1alpha1.SecretKeyRef{Name: "redis", Key: "redis-password"}},
+		},
+	}
+	env := autheliaFileEnv(s, false)
+
+	byName := map[string]corev1.EnvVar{}
+	for _, e := range env {
+		byName[e.Name] = e
+	}
+
+	file := byName["AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE"]
+	if want := secretMountPath("AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE") + "/password"; file.Value != want {
+		t.Errorf("_FILE var = %q, want path %q", file.Value, want)
+	}
+
+	direct := byName["AUTHELIA_SESSION_REDIS_PASSWORD"]
+	if direct.ValueFrom == nil || direct.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("non-_FILE var should use valueFrom secretKeyRef: %#v", direct)
+	}
+	if direct.ValueFrom.SecretKeyRef.Name != "redis" || direct.ValueFrom.SecretKeyRef.Key != "redis-password" {
+		t.Errorf("unexpected secretKeyRef: %#v", direct.ValueFrom.SecretKeyRef)
 	}
 }
 

@@ -1,0 +1,26 @@
+# Example app Ingress that opts into Authelia access control. The operator reads
+# the heliop/rule[-N] JSON annotations and generates matching access_control
+# rules, forcing the domain to the Ingress hosts (grafana.example.com here).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: default
+  annotations:
+    # policy is required; any other Authelia rule fields pass through verbatim.
+    heliop/rule: '{"policy":"two_factor","subject":["group:admins"]}'
+    # Add a numeric suffix for additional rules. Longer resources sort first, so
+    # this bypass for /health is matched before the two_factor rule above.
+    heliop/rule-1: '{"policy":"bypass","resources":["^/health$"]}'
+spec:
+  rules:
+    - host: grafana.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 80

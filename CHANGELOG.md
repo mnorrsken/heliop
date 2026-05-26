@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-05-26
+
+### Added
+- Dynamic Authelia `access_control` rules generated from `Ingress` annotations.
+  Annotate an Ingress with one or more `heliop/rule[-N]` annotations, each a JSON
+  Authelia rule (`policy` required; other fields pass through verbatim). The
+  operator forces the rule `domain` to the Ingress hosts (it cannot be set in the
+  annotation) and prepends generated rules before the static rules in
+  `additionalConfig`, ordered most-specific-first (longer `resources` patterns,
+  then exact hosts before wildcards). The controller watches Ingresses (new
+  `networking.k8s.io/ingresses` RBAC), and the covered domains are reported in
+  `status.accessControlRules`.
+
 ## [0.8.0] - 2026-05-26
 
 ### Changed
@@ -154,6 +167,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows for linting, testing, building the controller image,
   and releasing multi-arch images to GHCR on `v*` tags.
 
+[0.9.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.9.0
 [0.8.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.8.0
 [0.7.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.7.0
 [0.6.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.6.0

@@ -102,7 +102,7 @@ func toIfaceSlice(in []string) []any {
 // renderConfig builds the Authelia configuration from settings.additionalConfig,
 // wires the backend Secret references, generates a default session cookie from
 // hostname, injects the OIDC clients, and returns the resulting YAML.
-func renderConfig(settings autheliav1alpha1.AutheliaSettings, clients []oidcClient, hostname string) (string, error) {
+func renderConfig(settings autheliav1alpha1.AutheliaSettings, clients []oidcClient, ingressRules []map[string]any, hostname string) (string, error) {
 	root := map[string]any{}
 	if raw := settings.AdditionalConfig; raw != nil && len(raw.Raw) > 0 {
 		if err := json.Unmarshal(raw.Raw, &root); err != nil {
@@ -112,6 +112,17 @@ func renderConfig(settings autheliav1alpha1.AutheliaSettings, clients []oidcClie
 
 	applyFileBackend(root, settings)
 	applySession(root, hostname)
+
+	if len(ingressRules) > 0 {
+		// Prepend generated rules before the static rules (first match wins).
+		ac := childMap(root, "access_control")
+		existing, _ := ac["rules"].([]any)
+		rules := make([]any, 0, len(ingressRules)+len(existing))
+		for _, r := range ingressRules {
+			rules = append(rules, r)
+		}
+		ac["rules"] = append(rules, existing...)
+	}
 
 	if len(clients) > 0 {
 		// Sort by client ID so output is deterministic regardless of list order.

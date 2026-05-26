@@ -23,6 +23,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -50,6 +51,7 @@ type AutheliaReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch
 
 // Reconcile renders the Authelia configuration (including OIDC clients sourced
 // from AutheliaOAuthClient resources) and reconciles the Deployment, Service,
@@ -67,7 +69,12 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 
-	renderedConfig, err := renderConfig(authelia.Spec.Settings, clients, authelia.Spec.Hostname)
+	ingressRules, ruleDomains, err := r.collectIngressRules(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	renderedConfig, err := renderConfig(authelia.Spec.Settings, clients, ingressRules, authelia.Spec.Hostname)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -94,7 +101,7 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		clientIDs = append(clientIDs, c.spec.ClientID)
 	}
 	sort.Strings(clientIDs)
-	if err := r.updateStatus(ctx, &authelia, readyReplicas, clientIDs); err != nil {
+	if err := r.updateStatus(ctx, &authelia, readyReplicas, clientIDs, ruleDomains); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -256,10 +263,37 @@ func (r *AutheliaReconciler) reconcileDeployment(ctx context.Context, a *autheli
 	return dep.Status.ReadyReplicas, nil
 }
 
-func (r *AutheliaReconciler) updateStatus(ctx context.Context, a *autheliav1alpha1.Authelia, ready int32, clientIDs []string) error {
+func (r *AutheliaReconciler) updateStatus(ctx context.Context, a *autheliav1alpha1.Authelia, ready int32, clientIDs, ruleDomains []string) error {
 	a.Status.ReadyReplicas = ready
 	a.Status.OIDCClients = clientIDs
+	a.Status.AccessControlRules = ruleDomains
 	return r.Status().Update(ctx, a)
+}
+
+// collectIngressRules lists opted-in Ingresses cluster-wide and returns the
+// generated access_control rules (deterministically ordered) along with the
+// domains they cover, for status.
+func (r *AutheliaReconciler) collectIngressRules(ctx context.Context) ([]map[string]any, []string, error) {
+	var list networkingv1.IngressList
+	if err := r.List(ctx, &list); err != nil {
+		return nil, nil, err
+	}
+
+	rules := make([]accessRule, 0, len(list.Items))
+	for i := range list.Items {
+		rules = append(rules, ingressAccessRules(&list.Items[i])...)
+	}
+	sortAccessRules(rules)
+
+	out := make([]map[string]any, 0, len(rules))
+	var domains []string
+	for _, ar := range rules {
+		out = append(out, ar.rule)
+		for _, d := range ar.rule["domain"].([]any) {
+			domains = append(domains, d.(string))
+		}
+	}
+	return out, domains, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.
@@ -271,8 +305,29 @@ func (r *AutheliaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		Watches(&autheliav1alpha1.AutheliaOAuthClient{}, handler.EnqueueRequestsFromMapFunc(mapClientToAuthelia)).
+		Watches(&networkingv1.Ingress{}, handler.EnqueueRequestsFromMapFunc(r.mapIngressToAuthelia)).
 		Named("authelia").
 		Complete(r)
+}
+
+// mapIngressToAuthelia enqueues every Authelia when an opted-in Ingress changes,
+// since generated access_control rules apply to the instance(s) cluster-wide.
+func (r *AutheliaReconciler) mapIngressToAuthelia(ctx context.Context, obj client.Object) []reconcile.Request {
+	ing, ok := obj.(*networkingv1.Ingress)
+	if !ok || !hasRuleAnnotations(ing) {
+		return nil
+	}
+	var list autheliav1alpha1.AutheliaList
+	if err := r.List(ctx, &list); err != nil {
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		reqs = append(reqs, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: list.Items[i].Namespace, Name: list.Items[i].Name},
+		})
+	}
+	return reqs
 }
 
 // mapClientToAuthelia routes OAuth client events to the Authelia they target.

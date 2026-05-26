@@ -425,6 +425,13 @@ spec:
           status:
             description: status defines the observed state of Authelia
             properties:
+              accessControlRules:
+                description: |-
+                  accessControlRules lists the domains for which access_control rules were
+                  generated from Ingress annotations.
+                items:
+                  type: string
+                type: array
               conditions:
                 description: |-
                   conditions represent the current state of the Authelia resource.

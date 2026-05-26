@@ -32,6 +32,9 @@ custom resources in the `authelia.snosr.se/v1alpha1` API group:
   Redis) instance just works.
 - **OIDC clients as resources** — each `AutheliaOAuthClient` generates its own
   secret; OIDC is only enabled in Authelia when at least one client exists.
+- **Dynamic rules from Ingress** — annotate an `Ingress` with a `heliop/rule`
+  JSON rule and the operator generates a matching `access_control` rule from its
+  hosts (see [Ingress access control](#ingress-access-control)).
 - **Persistent storage** — `deployment.volumeClaimTemplate` has the operator
   create a retained PVC mounted at `/data` (requires `replicas: 1`); otherwise
   `/data` is an `emptyDir`.
@@ -125,6 +128,38 @@ spec:
 
 The generated `client_id` / `client_secret` are available in the
 `argocd-oauth-secret` Secret. More examples live in [config/samples](config/samples/).
+
+## Ingress access control
+
+Annotate an `Ingress` with a `heliop/rule` annotation whose value is a JSON
+Authelia access_control rule. The operator forces the rule's `domain` to the
+Ingress hosts (`spec.rules[].host` + `spec.tls[].hosts`) — it cannot be set in
+the annotation — and prepends generated rules before the static rules in
+`additionalConfig` (Authelia is first-match-wins). Set `default_policy` (e.g.
+`deny`) in `additionalConfig`.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  annotations:
+    # Single rule. policy is required and must be one of
+    # bypass / one_factor / two_factor / deny. Any other Authelia rule fields
+    # (subject, networks, resources, methods, ...) are passed through verbatim.
+    heliop/rule: '{"policy":"two_factor","subject":["group:admins"]}'
+    # Multiple rules: add a numeric suffix.
+    heliop/rule-1: '{"policy":"bypass","resources":["^/health$"]}'
+spec:
+  rules:
+    - host: grafana.example.com   # becomes the rule domain
+      # ...
+```
+
+**Ordering** (most specific first): rules with longer `resources` patterns come
+first, then exact hosts before wildcards, then a stable key. This lets a narrow
+path rule (e.g. `^/admin/.*`) take precedence over a broader one on the same
+host. An Ingress without any `heliop/rule[-*]` annotation is ignored.
 
 ## Development
 

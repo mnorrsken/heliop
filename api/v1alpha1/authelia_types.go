@@ -165,6 +165,11 @@ type AutheliaStatus struct {
 	// Authelia configuration.
 	// +optional
 	OIDCClients []string `json:"oidcClients,omitempty"`
+
+	// accessControlRules lists the domains for which access_control rules were
+	// generated from Ingress annotations.
+	// +optional
+	AccessControlRules []string `json:"accessControlRules,omitempty"`
 }
 
 // +kubebuilder:object:root=true

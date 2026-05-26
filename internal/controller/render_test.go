@@ -38,7 +38,7 @@ func settings(additionalConfigJSON string) autheliav1alpha1.AutheliaSettings {
 
 func mustRender(t *testing.T, s autheliav1alpha1.AutheliaSettings, clients []oidcClient, hostname string) map[string]any {
 	t.Helper()
-	out, err := renderConfig(s, clients, hostname)
+	out, err := renderConfig(s, clients, nil, hostname)
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}
@@ -183,8 +183,40 @@ func TestRenderConfigSessionExplicitCookiesNotOverridden(t *testing.T) {
 	}
 }
 
+func TestRenderConfigPrependsIngressRules(t *testing.T) {
+	s := settings(`{"access_control":{"default_policy":"deny","rules":[{"domain":["*.example.com"],"policy":"two_factor"}]}}`)
+	ingressRules := []map[string]any{
+		{"domain": []any{"grafana.example.com"}, "policy": "one_factor"},
+	}
+
+	out, err := renderConfig(s, nil, ingressRules, "")
+	if err != nil {
+		t.Fatalf("renderConfig: %v", err)
+	}
+	var root map[string]any
+	if err := yaml.Unmarshal([]byte(out), &root); err != nil {
+		t.Fatalf("invalid yaml: %v", err)
+	}
+	ac := root["access_control"].(map[string]any)
+	if ac["default_policy"] != "deny" {
+		t.Errorf("default_policy lost: %v", ac["default_policy"])
+	}
+	rules := ac["rules"].([]any)
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+	first := rules[0].(map[string]any)
+	if first["domain"].([]any)[0] != "grafana.example.com" {
+		t.Errorf("generated rule not prepended: %#v", rules[0])
+	}
+	last := rules[1].(map[string]any)
+	if last["domain"].([]any)[0] != "*.example.com" {
+		t.Errorf("static rule not preserved after generated: %#v", rules[1])
+	}
+}
+
 func TestRenderConfigEmpty(t *testing.T) {
-	out, err := renderConfig(autheliav1alpha1.AutheliaSettings{}, nil, "")
+	out, err := renderConfig(autheliav1alpha1.AutheliaSettings{}, nil, nil, "")
 	if err != nil {
 		t.Fatalf("renderConfig: %v", err)
 	}

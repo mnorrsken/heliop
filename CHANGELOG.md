@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-05-26
+
+### Changed
+- **Breaking:** `spec.settings.secrets` is now a generic list of
+  `{name, secret}` entries mapping any Authelia environment variable to a Secret
+  value. When `name` ends with `_FILE` the Secret is mounted and the variable is
+  set to the file path; otherwise the variable value is taken directly from the
+  Secret via `valueFrom`. Replaces the typed `ldapPassword`/`smtpPassword`/
+  `redisPassword`/`postgresPassword` fields. The operator no longer strips the
+  LDAP password from `additionalConfig` — do not also set a value there that you
+  provide via `secrets`.
+
+### Removed
+- **Breaking:** Traefik integration (`spec.traefik`, the generated IngressRoute
+  and forwardAuth Middleware, and the `traefik.io` RBAC). Route to the Authelia
+  Service and apply forwardAuth with your own ingress configuration.
+- The template-specific `redis-ha-client` pod label.
+
 ## [0.7.0] - 2026-05-22
 
 ### Changed
@@ -136,6 +154,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitHub Actions workflows for linting, testing, building the controller image,
   and releasing multi-arch images to GHCR on `v*` tags.
 
+[0.8.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.8.0
 [0.7.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.7.0
 [0.6.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.6.0
 [0.5.0]: https://github.com/mnorrsken/heliop/releases/tag/v0.5.0

@@ -25,7 +25,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -51,11 +50,10 @@ type AutheliaReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;configmaps;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=traefik.io,resources=ingressroutes;middlewares,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile renders the Authelia configuration (including OIDC clients sourced
 // from AutheliaOAuthClient resources) and reconciles the Deployment, Service,
-// ConfigMap and aggregated OIDC client Secret.
+// ConfigMap and core Secret.
 func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -84,9 +82,6 @@ func (r *AutheliaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileDataPVC(ctx, &authelia); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileTraefik(ctx, &authelia); err != nil {
 		return ctrl.Result{}, err
 	}
 	readyReplicas, err := r.reconcileDeployment(ctx, &authelia, len(clients) > 0, configChecksum(renderedConfig))
@@ -221,35 +216,6 @@ func (r *AutheliaReconciler) reconcileDataPVC(ctx context.Context, a *autheliav1
 		return err
 	}
 	return r.Create(ctx, buildDataPVC(a))
-}
-
-// reconcileTraefik generates the Traefik forwardAuth Middleware and the portal
-// IngressRoute when spec.traefik is set. It is a no-op otherwise.
-func (r *AutheliaReconciler) reconcileTraefik(ctx context.Context, a *autheliav1alpha1.Authelia) error {
-	if a.Spec.Traefik == nil {
-		return nil
-	}
-	for _, desired := range []*unstructured.Unstructured{
-		buildForwardAuthMiddleware(a),
-		buildIngressRoute(a),
-	} {
-		spec := desired.Object["spec"]
-		labels := desired.GetLabels()
-
-		obj := &unstructured.Unstructured{}
-		obj.SetGroupVersionKind(desired.GroupVersionKind())
-		obj.SetName(desired.GetName())
-		obj.SetNamespace(desired.GetNamespace())
-
-		if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
-			obj.SetLabels(labels)
-			obj.Object["spec"] = spec
-			return controllerutil.SetControllerReference(a, obj, r.Scheme)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (r *AutheliaReconciler) reconcileConfigMap(ctx context.Context, a *autheliav1alpha1.Authelia, rendered string) error {

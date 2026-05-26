@@ -346,8 +346,7 @@ spec:
                 description: |-
                   hostname is the fully qualified hostname where the Authelia portal is
                   served (e.g. auth.example.com). It is used to generate a default session
-                  cookie (authelia_url https://<hostname>, cookie domain the parent domain)
-                  and as the Traefik IngressRoute host.
+                  cookie (authelia_url https://<hostname>, cookie domain the parent domain).
                 type: string
               settings:
                 description: |-
@@ -420,27 +419,9 @@ spec:
                     - name
                     x-kubernetes-list-type: map
                 type: object
-              traefik:
-                description: |-
-                  traefik, when set, makes the operator generate a Traefik IngressRoute for
-                  the portal (at hostname) and a forwardAuth Middleware named
-                  "<name>-forwardauth" that other IngressRoutes can reference to require
-                  authentication. Requires the Traefik CRDs and hostname to be set.
-                properties:
-                  entryPoints:
-                    description: |-
-                      entryPoints are the Traefik entry points the portal IngressRoute listens
-                      on. Defaults to ["websecure"].
-                    items:
-                      type: string
-                    type: array
-                type: object
             required:
             - settings
             type: object
-            x-kubernetes-validations:
-            - message: hostname is required when traefik is set
-              rule: '!has(self.traefik) || has(self.hostname)'
           status:
             description: status defines the observed state of Authelia
             properties:

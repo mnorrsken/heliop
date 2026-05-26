@@ -7,13 +7,8 @@ metadata:
   name: authelia
   namespace: authelia
 spec:
-  # Portal FQDN: used for the session cookie authelia_url and Traefik IngressRoute.
+  # Portal FQDN; used to generate the default session cookie.
   hostname: sso.example.com
-  # Generate a Traefik IngressRoute (portal) and a forwardAuth Middleware
-  # "authelia-forwardauth". Remove this block if not using Traefik.
-  traefik:
-    entryPoints:
-      - websecure
   deployment:
     replicas: 2
     image: ghcr.io/authelia/authelia:4
